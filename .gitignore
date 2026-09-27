@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# TRD local copies
+.trd/
+
+# RFP local copies
+.rfp/
+
+# Milestone planning artifacts (local, do not commit)
+.milestones/
+
+# Handoff documents (local, do not commit)
+.handoff/
