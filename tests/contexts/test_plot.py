@@ -476,9 +476,9 @@ def test_a_non_record_is_not_created_or_shown():
         create=create_handler(get_dependency),
         show=show_handler(get_dependency),
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(AttributeError):
         session.create(object())
-    with pytest.raises(ValueError):
+    with pytest.raises(AttributeError):
         session.show({'name': 'Sales by Region'})
 
 # ** test: session_does_not_import_the_drawing_tool_or_a_store
@@ -1024,14 +1024,14 @@ def test_edit_then_append_does_not_recompute_ids_or_mutate_the_caller():
 # ** test: edit_of_a_matrix_or_an_invalid_plot_opens_nothing
 def test_edit_of_a_matrix_or_an_invalid_plot_opens_nothing():
     '''
-    edit of a matrix fails. A plot that fails the record checks opens nothing.
+    edit of a matrix fails. A non-record opens nothing.
     '''
 
-    # A matrix has no kind. An empty series list is not a plot record.
+    # The matrix says it is a matrix. A non-record has no such description.
     session = bound()
     with pytest.raises(ValueError):
         session.edit(matrix())
-    with pytest.raises(ValidationError):
+    with pytest.raises(AttributeError):
         session.edit(SimpleNamespace(
             id='sales_by_region',
             name='Sales by Region',

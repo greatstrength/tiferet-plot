@@ -10,10 +10,8 @@ from tiferet.contexts.app import AppSessionContext, raise_unwired_handler_error
 from tiferet.contexts.cache import CacheContext
 from tiferet.domain import AppServiceDependency
 from ..domain.plot import (
-    PLOT_KINDS,
     Mark,
     Plot,
-    PlotMatrix,
     Series,
     _is_blank,
     _snake_case,
@@ -104,35 +102,6 @@ def get_default_plot_services(cache: CacheContext) -> List[AppServiceDependency]
     # Return the seeded services as a list.
     return list(cache.get_by_prefix(*PLOT_SERVICE_CACHE_PREFIX).values())
 
-# ** function: _record_kind
-def _record_kind(record: Any, action: str) -> str:
-    '''
-    Return which path a finished record takes.
-
-    A matrix is not a plot. A line and a bar are both plots. This does
-    not declare a record and does not invent a grid.
-
-    :param record: The finished record.
-    :type record: Any
-    :param action: The session act that received the record.
-    :type action: str
-    :return: ``matrix`` or ``plot``.
-    :rtype: str
-    '''
-
-    # A matrix is its own record. Check it before a plot.
-    if isinstance(record, PlotMatrix):
-        return 'matrix'
-
-    # A plot aggregate is still a plot. Kind does not split the path.
-    if isinstance(record, Plot):
-        return 'plot'
-
-    # The caller passes a finished record. This session does not declare one.
-    raise ValueError(
-        f'{action} requires a plot record or a matrix record.'
-    )
-
 # ** function: create_handler
 def create_handler(get_dependency: Callable) -> Callable:
     '''
@@ -152,7 +121,7 @@ def create_handler(get_dependency: Callable) -> Callable:
     def handler(record: Any) -> Any:
 
         # A matrix and a plot do not share a create event.
-        if _record_kind(record, 'create') == 'matrix':
+        if record.is_matrix:
             event = get_dependency(CREATE_MATRIX_EVENT_ID, PLOT_FLAG)
             return event.execute(
                 name=record.name,
@@ -194,14 +163,14 @@ def show_handler(get_dependency: Callable) -> Callable:
     # Return the handler closure bound to the resolver.
     def handler(record: Any) -> bytes:
 
-        # Reject a non-record before resolving the renderer.
-        kind = _record_kind(record, 'show')
+        # The record says whether it is a matrix. A non-record has no such description.
+        is_matrix = record.is_matrix
 
         # The drawing tool is a service on the plot flag, not an import here.
         renderer = get_dependency(RENDERER_SERVICE_ID, PLOT_FLAG)
 
         # A matrix is one picture of the grid. A plot is one picture of the record.
-        if kind == 'matrix':
+        if is_matrix:
             return renderer.render_matrix(record)
 
         # Kind does not choose a different show.
@@ -243,55 +212,6 @@ def _settled_id(name: str, supplied: Any) -> str:
 
     # Return the id settled at this call. Later calls pass it through.
     return derived
-
-# ** function: _require_kind
-def _require_kind(kind: str) -> str:
-    '''
-    Reject a kind that is not one of the declared kinds.
-
-    Kind is an input. It is not inferred from the values.
-
-    :param kind: The supplied kind.
-    :type kind: str
-    :return: The kind, unchanged.
-    :rtype: str
-    '''
-
-    # Kind is not normalized and not guessed from case.
-    if kind not in PLOT_KINDS:
-        allowed = ', '.join(PLOT_KINDS)
-        raise ValueError(
-            f'Kind {kind!r} is not one of {allowed}.'
-        )
-
-    # Return the supplied kind.
-    return kind
-
-# ** function: _is_matrix
-def _is_matrix(record: Any) -> bool:
-    '''
-    Return whether a record is a matrix rather than a plot.
-
-    A matrix has no kind. This does not declare a grid.
-
-    :param record: The record the caller passed.
-    :type record: Any
-    :return: True when the record is a matrix.
-    :rtype: bool
-    '''
-
-    # A matrix aggregate is not a plot.
-    if isinstance(record, PlotMatrix):
-        return True
-
-    # A plot aggregate has a kind. A mapping without one is not a plot.
-    if isinstance(record, Plot):
-        return False
-    if isinstance(record, dict):
-        return 'kind' not in record
-
-    # An object with no kind is not a plot.
-    return not hasattr(record, 'kind')
 
 # ** function: _copy_series
 def _copy_series(series: Series, marks: List[Mark] = None) -> Series:
@@ -370,25 +290,20 @@ def _own_plot(plot: Any) -> Plot:
     :rtype: Plot
     '''
 
-    # A matrix has no kind. Do not open a chain from one.
-    if _is_matrix(plot):
+    # The record says whether it is a matrix. Do not sniff its type.
+    if plot.is_matrix:
         raise ValueError('A matrix is not a plot.')
-
-    # Copy series the caller already holds so later edits do not share them.
-    series = []
-    for item in plot.series:
-        if isinstance(item, Series):
-            series.append(_copy_series(item))
-            continue
-        series.append(item)
 
     # Re-declare with the ids already on the record. Do not derive them.
     return _declare_plot(
         plot.id,
         plot.name,
         plot.kind,
-        getattr(plot, 'description', None),
-        series,
+        plot.description,
+        [
+            _copy_series(item)
+            for item in plot.series
+        ],
     )
 
 # ** function: _extended_marks
@@ -562,7 +477,7 @@ class PlotterSessionContext(AppSessionContext):
 
         # Settle the id and the kind before opening. A failure opens nothing.
         plot_id = _settled_id(name, id)
-        settled_kind = _require_kind(kind)
+        settled_kind = Plot.require_kind(kind)
         self._open = {
             'id': plot_id,
             'name': name,

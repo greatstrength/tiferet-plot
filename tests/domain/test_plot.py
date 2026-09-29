@@ -130,6 +130,10 @@ def test_declaration_derives_ids_and_excludes_renderer_and_store():
     assert plot.id == 'sales_by_region'
     assert plot.series[0].id == 'revenue'
 
+    # A plot is not a matrix. Kind legality is the plot's description.
+    assert plot.is_matrix is False
+    assert Plot.require_kind('line') == 'line'
+
     # The record has no renderer, path, or database handle.
     assert set(Plot.model_fields) == {
         'id',
@@ -501,6 +505,8 @@ def test_matrix_declaration_derives_id_and_keeps_the_cell_plot():
 
     # The matrix id is the snake_case name. The cell plot id is unchanged.
     assert matrix.id == 'sales_by_region'
+    assert matrix.is_matrix is True
+    assert matrix.cells[0].plot.is_matrix is False
     assert matrix.cells[0].plot.id == 'revenue_plot'
     assert matrix.cells[0].plot is plot
     assert matrix.rows == 2
