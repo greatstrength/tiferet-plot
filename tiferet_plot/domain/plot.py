@@ -432,6 +432,47 @@ class Plot(DomainObject):
         description='The series in this plot. A plot has at least one.',
     )
 
+    # * method: is_matrix (property)
+    @property
+    def is_matrix(self) -> bool:
+        '''
+        Return whether this record is a matrix.
+
+        A line, a scatter, and a bar are plots. Kind does not make a
+        plot into a matrix.
+
+        :return: False. A plot is not a matrix.
+        :rtype: bool
+        '''
+
+        # A plot is the record with a kind. It is not a grid.
+        return False
+
+    # * method: require_kind (static)
+    @staticmethod
+    def require_kind(kind: str) -> str:
+        '''
+        Reject a kind that is not one of the declared kinds.
+
+        Kind is an input. It is not inferred from the values, and it is
+        not guessed from case.
+
+        :param kind: The supplied kind.
+        :type kind: str
+        :return: The kind, unchanged.
+        :rtype: str
+        '''
+
+        # Kind is not normalized. The declared kinds are the description.
+        if kind not in PLOT_KINDS:
+            allowed = ', '.join(PLOT_KINDS)
+            raise ValueError(
+                f'Kind {kind!r} is not one of {allowed}.'
+            )
+
+        # Return the supplied kind.
+        return kind
+
     # * method: _derive_id (model validator)
     @model_validator(mode='before')
     @classmethod
@@ -463,15 +504,8 @@ class Plot(DomainObject):
         :rtype: str
         '''
 
-        # Kind is an input. It is not normalized and not inferred.
-        if value not in PLOT_KINDS:
-            allowed = ', '.join(PLOT_KINDS)
-            raise ValueError(
-                f'Kind {value!r} is not one of {allowed}.'
-            )
-
-        # Return the supplied kind.
-        return value
+        # The plot describes a legal kind. Do not restate that rule here.
+        return cls.require_kind(value)
 
     # * method: _validate_declaration (model validator)
     @model_validator(mode='after')
@@ -592,6 +626,22 @@ class PlotMatrix(DomainObject):
         min_length=1,
         description='The occupied cells. An empty corner is not a cell.',
     )
+
+    # * method: is_matrix (property)
+    @property
+    def is_matrix(self) -> bool:
+        '''
+        Return whether this record is a matrix.
+
+        A matrix is a declared grid. It is not a fourth chart kind, and
+        it has no kind of its own.
+
+        :return: True. A matrix is not a plot.
+        :rtype: bool
+        '''
+
+        # A matrix is its own record. Kind does not describe it.
+        return True
 
     # * method: _derive_id (model validator)
     @model_validator(mode='before')

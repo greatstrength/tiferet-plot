@@ -22,6 +22,7 @@ from ..contexts.plot import (
     PLOT_FLAG,
     PLOT_SERVICE_ID,
     RENDERER_SERVICE_ID,
+    UPDATE_PLOT_EVENT_ID,
     PlotterSessionContext,
     add_default_plot_services,
     create_handler,
@@ -44,6 +45,12 @@ PLOTTER_SESSION_ID = 'plotter'
 CREATE_PLOT_EVENT_DATA = create_app_service_dependency_data(
     create_service_module_path(PLOT_PACKAGE, 'events', PLOT_MODULE),
     'CreatePlot',
+)
+
+# ** constant: update_plot_event_data
+UPDATE_PLOT_EVENT_DATA = create_app_service_dependency_data(
+    create_service_module_path(PLOT_PACKAGE, 'events', PLOT_MODULE),
+    'UpdatePlot',
 )
 
 # ** constant: create_matrix_event_data
@@ -72,9 +79,10 @@ MATRIX_REPOSITORY_DATA = create_app_service_dependency_data(
 
 # ** constant: plot_default_services
 PLOT_DEFAULT_SERVICES: Dict[str, Dict[str, Any]] = {
-    CREATE_PLOT_EVENT_ID: CREATE_PLOT_EVENT_DATA,
     CREATE_MATRIX_EVENT_ID: CREATE_MATRIX_EVENT_DATA,
+    CREATE_PLOT_EVENT_ID: CREATE_PLOT_EVENT_DATA,
     RENDERER_SERVICE_ID: RENDERER_SERVICE_DATA,
+    UPDATE_PLOT_EVENT_ID: UPDATE_PLOT_EVENT_DATA,
 }
 
 # *** blueprints

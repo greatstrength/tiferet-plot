@@ -26,7 +26,10 @@ from tiferet_plot.domain.plot import (
     PlotMatrix,
     Series,
 )
-from tiferet_plot.interfaces.plot import PLOT_ALREADY_KEPT_ID
+from tiferet_plot.interfaces.plot import (
+    PLOT_ALREADY_KEPT_ID,
+    PLOT_NOT_KEPT_ID,
+)
 from tiferet_plot.repos.plot import (
     MatrixConfigRepository,
     PlotConfigRepository,
@@ -248,3 +251,68 @@ def test_show_returns_png_bytes_and_does_not_write_a_file(tmp_path):
     shown = session.show(created)
     assert shown.startswith(PNG_SIGNATURE)
     assert path.read_bytes() == before
+
+# ** test: chain_create_keeps_the_settled_ids
+def test_chain_create_keeps_the_settled_ids(tmp_path):
+    '''
+    A chain create calls the existing create event and keeps the settled ids.
+    '''
+
+    # The chain does not open the file. The event does, and returns the record.
+    path = tmp_path / 'publication.yml'
+    session = create_plotter_session(plot_config=str(path))
+    kept = session.draft(
+        'Sales by Region',
+        'line',
+    ).add_series(
+        'Revenue',
+        [
+            Mark(role='x', values=(1, 2)),
+            Mark(role='y', values=(3, 4)),
+        ],
+    ).create()
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+    assert PlotConfigRepository(str(path)).get('sales_by_region').name == 'Sales by Region'
+
+    # Success drops the chain, so another draft can open.
+    assert session.draft('Other', 'bar') is session
+
+# ** test: chain_update_keeps_an_edit_and_does_not_insert
+def test_chain_update_keeps_an_edit_and_does_not_insert(tmp_path):
+    '''
+    update calls UpdatePlot. A missing id fails and does not insert.
+    '''
+
+    # Keep a record first, then extend it through the chain.
+    path = tmp_path / 'publication.yml'
+    session = create_plotter_session(plot_config=str(path))
+    created = session.create(line_plot(plot_id='sales_by_region'))
+    updated = session.edit(created).append(
+        'revenue',
+        [
+            Mark(role='x', values=(5,)),
+            Mark(role='y', values=(6,)),
+        ],
+    ).update()
+    assert updated.id == 'sales_by_region'
+    loaded = PlotConfigRepository(str(path)).get('sales_by_region')
+    assert loaded.series[0].marks[0].values == (1, 2, 5)
+    assert loaded.series[0].id == 'revenue'
+    assert session.draft('Other', 'bar') is session
+
+    # An id that is not kept fails. The chain does not insert it.
+    session.discard()
+    session.draft('Missing Plot', 'line', id='missing').add_series(
+        'Revenue',
+        [
+            Mark(role='x', values=(1, 2)),
+            Mark(role='y', values=(3, 4)),
+        ],
+    )
+    with pytest.raises(ServiceError) as caught:
+        session.update()
+    assert caught.value.error_code == PLOT_NOT_KEPT_ID
+    assert PlotConfigRepository(str(path)).get('missing') is None
+    with pytest.raises(ValueError):
+        session.draft('Other', 'scatter')
