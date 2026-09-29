@@ -8,7 +8,12 @@ from .domain.plot import (
     Plot,
     Series,
 )
-from .interfaces.plot import RendererService
+from .interfaces.plot import (
+    PLOT_ALREADY_KEPT_ID,
+    PLOT_NOT_KEPT_ID,
+    PlotService,
+    RendererService,
+)
 from .mappers.plot import (
     PlotAggregate,
     SeriesAggregate,
@@ -17,9 +22,12 @@ from .mappers.plot import (
 # *** exports
 
 __all__ = [
+    'PLOT_ALREADY_KEPT_ID',
+    'PLOT_NOT_KEPT_ID',
     'Mark',
     'Plot',
     'PlotAggregate',
+    'PlotService',
     'RendererService',
     'Series',
     'SeriesAggregate',
