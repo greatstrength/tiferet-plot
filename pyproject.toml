@@ -9,6 +9,7 @@ license = { text = "BSD-3-Clause" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "matplotlib>=3.8",
     "tiferet>=2.1.1",
 ]
 
@@ -30,7 +31,9 @@ where = ["."]
 include = [
     "tiferet_plot",
     "tiferet_plot.domain",
+    "tiferet_plot.interfaces",
     "tiferet_plot.mappers",
+    "tiferet_plot.utils",
 ]
 
 [tool.pytest.ini_options]
