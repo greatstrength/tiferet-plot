@@ -1,13 +1,16 @@
-"""Plot aggregates."""
+"""Plot aggregates and publication-file shapes."""
 
 # *** imports
 
 # ** core
 from __future__ import annotations
-from typing import Sequence
+from typing import Any, ClassVar, Dict, Sequence
+
+# ** infra
+from pydantic import Field
 
 # ** app
-from tiferet.mappers import Aggregate
+from tiferet.mappers import Aggregate, TransferObject
 from ..domain.plot import Mark, Plot, Series
 
 # *** mappers
@@ -142,3 +145,106 @@ class PlotAggregate(Plot, Aggregate):
 
         # Keep the validated series. Identity is unchanged.
         self.series = checked.series
+
+# ** mapper: series_config_object
+class SeriesConfigObject(Series, TransferObject):
+    '''
+    The file shape of one series inside its plot.
+
+    A series is nested in the plot body, not a second store. Its id stays
+    on the series so a rename does not recompute it.
+    '''
+
+    # * attribute: _ROLES
+    _ROLES: ClassVar[Dict[str, Dict[str, Any]]] = {
+        'to_model': {},
+        'to_data': {
+            'by_alias': True,
+            'mode': 'json',
+        },
+    }
+
+    # * method: map
+    def map(self, **overrides) -> SeriesAggregate:
+        '''
+        Map the series file shape to a series aggregate.
+
+        :param overrides: Field values that replace the serialized shape.
+        :type overrides: dict
+        :return: The series aggregate.
+        :rtype: SeriesAggregate
+        '''
+
+        # Map to the aggregate. A supplied id is not derived again.
+        return super().map(SeriesAggregate, **overrides)
+
+# ** mapper: plot_config_object
+class PlotConfigObject(Plot, TransferObject):
+    '''
+    The file shape of a plot record, not a second record and not a picture.
+
+    The plot id is the file key, so ``to_data`` excludes it. Series are
+    nested transfer objects in the body. The body does not keep a renderer
+    or a store handle.
+    '''
+
+    # * attribute: _ROLES
+    _ROLES: ClassVar[Dict[str, Dict[str, Any]]] = {
+        'to_model': {
+            'exclude': {'series'},
+        },
+        'to_data': {
+            'by_alias': True,
+            'exclude': {'id'},
+            'mode': 'json',
+        },
+    }
+
+    # * attribute: series
+    series: list[SeriesConfigObject] = Field(
+        ...,
+        min_length=1,
+        description='The series nested in this plot entry.',
+    )
+
+    # * method: map
+    def map(self, **overrides) -> PlotAggregate:
+        '''
+        Map the plot file shape to a plot aggregate.
+
+        :param overrides: Field values that replace the serialized shape.
+        :type overrides: dict
+        :return: The plot aggregate.
+        :rtype: PlotAggregate
+        '''
+
+        # Map nested series, then the plot. Ids already on the objects are kept.
+        return super().map(
+            PlotAggregate,
+            series=[series.map() for series in self.series],
+            **overrides,
+        )
+
+    # * method: from_model
+    @classmethod
+    def from_model(cls, plot: Plot, **overrides) -> 'PlotConfigObject':
+        '''
+        Create a plot file shape from a plot record.
+
+        :param plot: The plot record.
+        :type plot: Plot
+        :param overrides: Field values that replace the record.
+        :type overrides: dict
+        :return: The plot file shape.
+        :rtype: PlotConfigObject
+        '''
+
+        # Convert each series, then the plot. This does not derive an id.
+        return super().from_model(
+            plot,
+            series=[
+                SeriesConfigObject.from_model(series)
+                for series in plot.series
+            ],
+            **overrides,
+        )

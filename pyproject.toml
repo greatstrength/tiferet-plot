@@ -33,6 +33,7 @@ include = [
     "tiferet_plot.domain",
     "tiferet_plot.interfaces",
     "tiferet_plot.mappers",
+    "tiferet_plot.repos",
     "tiferet_plot.utils",
 ]
 
