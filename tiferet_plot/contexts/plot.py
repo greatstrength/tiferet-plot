@@ -3,13 +3,21 @@
 # *** imports
 
 # ** core
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ** app
 from tiferet.contexts.app import AppSessionContext, raise_unwired_handler_error
 from tiferet.contexts.cache import CacheContext
 from tiferet.domain import AppServiceDependency
-from ..domain.plot import Plot, PlotMatrix
+from ..domain.plot import (
+    PLOT_KINDS,
+    Mark,
+    Plot,
+    PlotMatrix,
+    Series,
+    _is_blank,
+    _snake_case,
+)
 
 # *** constants
 
@@ -21,6 +29,9 @@ PLOT_SERVICE_CACHE_PREFIX: Tuple[str, ...] = ('plot', 'services')
 
 # ** constant: create_plot_event_id
 CREATE_PLOT_EVENT_ID = 'create_plot_evt'
+
+# ** constant: update_plot_event_id
+UPDATE_PLOT_EVENT_ID = 'update_plot_evt'
 
 # ** constant: create_matrix_event_id
 CREATE_MATRIX_EVENT_ID = 'create_matrix_evt'
@@ -199,6 +210,213 @@ def show_handler(get_dependency: Callable) -> Callable:
     # Return the closure.
     return handler
 
+# ** function: _settled_id
+def _settled_id(name: str, supplied: Any) -> str:
+    '''
+    Keep a supplied id, or derive one once from the name.
+
+    A missing id and a blank id are the same case. An empty derivation
+    cannot identify the record.
+
+    :param name: The author's name.
+    :type name: str
+    :param supplied: The id the caller supplied, if any.
+    :type supplied: Any
+    :return: The id to keep.
+    :rtype: str
+    '''
+
+    # A supplied id is kept. Derivation does not rewrite it.
+    if not _is_blank(supplied):
+        return supplied
+
+    # A blank id is not a supplied id. Derive it once.
+    if not isinstance(name, str):
+        raise ValueError(
+            'The name cannot identify the record and no id was supplied.'
+        )
+    derived = _snake_case(name)
+    if not derived:
+        raise ValueError(
+            'The name cannot identify the record and no id was supplied.'
+        )
+
+    # Return the id settled at this call. Later calls pass it through.
+    return derived
+
+# ** function: _require_kind
+def _require_kind(kind: str) -> str:
+    '''
+    Reject a kind that is not one of the declared kinds.
+
+    Kind is an input. It is not inferred from the values.
+
+    :param kind: The supplied kind.
+    :type kind: str
+    :return: The kind, unchanged.
+    :rtype: str
+    '''
+
+    # Kind is not normalized and not guessed from case.
+    if kind not in PLOT_KINDS:
+        allowed = ', '.join(PLOT_KINDS)
+        raise ValueError(
+            f'Kind {kind!r} is not one of {allowed}.'
+        )
+
+    # Return the supplied kind.
+    return kind
+
+# ** function: _is_matrix
+def _is_matrix(record: Any) -> bool:
+    '''
+    Return whether a record is a matrix rather than a plot.
+
+    A matrix has no kind. This does not declare a grid.
+
+    :param record: The record the caller passed.
+    :type record: Any
+    :return: True when the record is a matrix.
+    :rtype: bool
+    '''
+
+    # A matrix aggregate is not a plot.
+    if isinstance(record, PlotMatrix):
+        return True
+
+    # A plot aggregate has a kind. A mapping without one is not a plot.
+    if isinstance(record, Plot):
+        return False
+    if isinstance(record, dict):
+        return 'kind' not in record
+
+    # An object with no kind is not a plot.
+    return not hasattr(record, 'kind')
+
+# ** function: _copy_series
+def _copy_series(series: Series, marks: List[Mark] = None) -> Series:
+    '''
+    Declare a series again, passing its id through.
+
+    The copy does not recompute the id, and it does not share mark
+    objects with the series it copies unless the caller supplies them.
+
+    :param series: The series to copy.
+    :type series: Series
+    :param marks: Replacement marks. The series marks are copied when omitted.
+    :type marks: List[Mark]
+    :return: A new series with the same id.
+    :rtype: Series
+    '''
+
+    # Pass the id through so declaration does not derive it again.
+    if marks is None:
+        marks = [
+            Mark(
+                role=mark.role,
+                values=tuple(mark.values),
+            )
+            for mark in series.marks
+        ]
+    return Series(
+        id=series.id,
+        name=series.name,
+        marks=marks,
+    )
+
+# ** function: _declare_plot
+def _declare_plot(plot_id: str,
+        name: str,
+        kind: str,
+        description: Any,
+        series: List[Series]) -> Plot:
+    '''
+    Declare the in-memory record again, passing settled ids through.
+
+    :param plot_id: The plot id already settled. Not derived again.
+    :type plot_id: str
+    :param name: The plot name.
+    :type name: str
+    :param kind: The plot kind.
+    :type kind: str
+    :param description: The optional claim text.
+    :type description: Any
+    :param series: The series, each with its id already settled.
+    :type series: List[Series]
+    :return: The declared plot.
+    :rtype: Plot
+    '''
+
+    # The supplied plot id is kept. Series ids were passed through.
+    return Plot(
+        id=plot_id,
+        name=name,
+        kind=kind,
+        description=description,
+        series=series,
+    )
+
+# ** function: _own_plot
+def _own_plot(plot: Any) -> Plot:
+    '''
+    Declare a plot the session holds, without mutating the caller's object.
+
+    A matrix is not a plot. A plot that fails the record checks is
+    rejected here, before a chain starts.
+
+    :param plot: The plot the caller already holds.
+    :type plot: Any
+    :return: The session's own record.
+    :rtype: Plot
+    '''
+
+    # A matrix has no kind. Do not open a chain from one.
+    if _is_matrix(plot):
+        raise ValueError('A matrix is not a plot.')
+
+    # Copy series the caller already holds so later edits do not share them.
+    series = []
+    for item in plot.series:
+        if isinstance(item, Series):
+            series.append(_copy_series(item))
+            continue
+        series.append(item)
+
+    # Re-declare with the ids already on the record. Do not derive them.
+    return _declare_plot(
+        plot.id,
+        plot.name,
+        plot.kind,
+        getattr(plot, 'description', None),
+        series,
+    )
+
+# ** function: _extended_marks
+def _extended_marks(series: Series, addition: Series) -> List[Mark]:
+    '''
+    Add values to each existing mark without changing roles.
+
+    :param series: The series being extended.
+    :type series: Series
+    :param addition: The values to add, already checked for the kind.
+    :type addition: Series
+    :return: New marks with the added values.
+    :rtype: List[Mark]
+    '''
+
+    # Index the addition by role. The series' roles stay in order.
+    added = {
+        mark.role: tuple(mark.values)
+        for mark in addition.marks
+    }
+    return [
+        Mark(
+            role=mark.role,
+            values=tuple(mark.values) + added[mark.role],
+        )
+        for mark in series.marks
+    ]
+
 # *** contexts
 
 # ** context: plotter_session_context
@@ -210,7 +428,8 @@ class PlotterSessionContext(AppSessionContext):
     not as a step on every kind. It omits ``domain_type`` so
     ``AppSession`` stays registered to ``AppSessionContext``. The
     generic application entry point cannot select this context.
-    Fluent chaining is not this session.
+    The fluent chain is methods on this session. It is not a second
+    context, a second plot, or a second entry point.
     '''
 
     # * attribute: resolver
@@ -221,6 +440,9 @@ class PlotterSessionContext(AppSessionContext):
 
     # * attribute: show (private)
     _show: Callable
+
+    # * attribute: open (private)
+    _open: Optional[Dict[str, Any]]
 
     # * init
     def __init__(self,
@@ -278,19 +500,279 @@ class PlotterSessionContext(AppSessionContext):
         self._create = create_handler
         self._show = show_handler
 
+        # No chain is open until draft or edit.
+        self._open = None
+
+    # * method: _refuse_clobber (private)
+    def _refuse_clobber(self) -> None:
+        '''
+        Fail when a plot is already open.
+
+        A second draft or edit does not replace the first plot.
+
+        :return: None
+        :rtype: None
+        '''
+
+        # Discard is the way out. This is not a delete.
+        if self._open is not None:
+            raise ValueError('A plot is already open.')
+
+    # * method: _remember (private)
+    def _remember(self, record: Plot) -> None:
+        '''
+        Replace the in-memory record with a newly declared plot.
+
+        :param record: The declared plot.
+        :type record: Plot
+        :return: None
+        :rtype: None
+        '''
+
+        # The settled plot id is not rewritten from the name.
+        self._open['series'] = list(record.series)
+        self._open['record'] = record
+
+    # * method: draft
+    def draft(self,
+            name: str,
+            kind: str,
+            id: str = None,
+            description: str = None) -> 'PlotterSessionContext':
+        '''
+        Open one in-memory plot with no series.
+
+        A missing or blank id is derived once from the name. A supplied
+        id is kept. An empty derivation opens nothing.
+
+        :param name: The author's name for the plot.
+        :type name: str
+        :param kind: The chart kind. One of line, scatter, or bar.
+        :type kind: str
+        :param id: The plot id. Derived from the name when omitted.
+        :type id: str
+        :param description: Optional claim text. Not used to derive the id.
+        :type description: str
+        :return: This session, for further chaining.
+        :rtype: PlotterSessionContext
+        '''
+
+        # A second draft does not replace the plot already open.
+        self._refuse_clobber()
+
+        # Settle the id and the kind before opening. A failure opens nothing.
+        plot_id = _settled_id(name, id)
+        settled_kind = _require_kind(kind)
+        self._open = {
+            'id': plot_id,
+            'name': name,
+            'kind': settled_kind,
+            'description': description,
+            'series': [],
+            'record': None,
+        }
+
+        # Return the session. The plot is not yet a record with series.
+        return self
+
+    # * method: edit
+    def edit(self, plot: Any) -> 'PlotterSessionContext':
+        '''
+        Open the chain from a plot the caller already holds.
+
+        The session keeps that plot's id and each series id. It does
+        not derive them again, and it does not mutate the object passed
+        in. A matrix is not a plot.
+
+        :param plot: The plot the caller already holds.
+        :type plot: Any
+        :return: This session, for further chaining.
+        :rtype: PlotterSessionContext
+        '''
+
+        # A second edit does not replace the plot already open.
+        self._refuse_clobber()
+
+        # Hold a new record. Invalid fields fail before a chain starts.
+        record = _own_plot(plot)
+        self._open = {
+            'id': record.id,
+            'name': record.name,
+            'kind': record.kind,
+            'description': record.description,
+            'series': list(record.series),
+            'record': record,
+        }
+
+        # Return the session. The caller's object is unchanged.
+        return self
+
+    # * method: add_series
+    def add_series(self,
+            name: str,
+            marks: Any,
+            id: str = None) -> 'PlotterSessionContext':
+        '''
+        Add one series to the open plot.
+
+        Marks are the role-and-values structure the kind already
+        requires. A missing or blank series id is derived once from
+        the series name. A supplied series id is kept. The plot id is
+        not recomputed.
+
+        :param name: The author's name for the series.
+        :type name: str
+        :param marks: The marks for this series. Each mark is a role and values.
+        :type marks: Any
+        :param id: The series id. Derived from the name when omitted.
+        :type id: str
+        :return: This session, for further chaining.
+        :rtype: PlotterSessionContext
+        '''
+
+        # A series needs an open plot. This does not open one.
+        if self._open is None:
+            raise ValueError('add_series requires an open plot.')
+
+        # Derive a missing series id once. A supplied id is kept.
+        added = Series(
+            name=name,
+            id=id,
+            marks=marks,
+        )
+
+        # Declare again with the settled plot id and the existing series ids.
+        series = [
+            _copy_series(item)
+            for item in self._open['series']
+        ]
+        series.append(added)
+        record = _declare_plot(
+            self._open['id'],
+            self._open['name'],
+            self._open['kind'],
+            self._open['description'],
+            series,
+        )
+
+        # A failed declaration does not reach here. The series list stays.
+        self._remember(record)
+        return self
+
+    # * method: append
+    def append(self,
+            series_id: str,
+            marks: Any) -> 'PlotterSessionContext':
+        '''
+        Add values to an existing series' marks.
+
+        The series is addressed by id, not by name. Every required role
+        is present, no other role is present, and the added sequences
+        are non-empty and of equal length. A failure leaves the marks
+        unchanged.
+
+        :param series_id: The id of the series to extend.
+        :type series_id: str
+        :param marks: The values to add. The same structure as ``add_series``.
+        :type marks: Any
+        :return: This session, for further chaining.
+        :rtype: PlotterSessionContext
+        '''
+
+        # An addition needs an open plot and a series with this id.
+        if self._open is None:
+            raise ValueError('append requires an open plot.')
+        current = None
+        for item in self._open['series']:
+            if item.id == series_id:
+                current = item
+                break
+        if current is None:
+            raise ValueError(f'No series with id {series_id!r}.')
+
+        # The addition must already satisfy the kind. Failure changes nothing.
+        addition = Series(
+            id=current.id,
+            name=current.name,
+            marks=marks,
+        )
+        _declare_plot(
+            self._open['id'],
+            self._open['name'],
+            self._open['kind'],
+            self._open['description'],
+            [
+                addition,
+            ],
+        )
+
+        # Rebuild every series. Only the addressed series gains values.
+        rebuilt = []
+        for item in self._open['series']:
+            if item.id == series_id:
+                rebuilt.append(_copy_series(
+                    item,
+                    marks=_extended_marks(item, addition),
+                ))
+                continue
+            rebuilt.append(_copy_series(item))
+        record = _declare_plot(
+            self._open['id'],
+            self._open['name'],
+            self._open['kind'],
+            self._open['description'],
+            rebuilt,
+        )
+
+        # A failed declaration does not reach here. Ids stay as settled.
+        self._remember(record)
+        return self
+
+    # * method: discard
+    def discard(self) -> 'PlotterSessionContext':
+        '''
+        Drop the in-memory plot.
+
+        This calls no event. It is not a removal of a kept record.
+
+        :return: This session.
+        :rtype: PlotterSessionContext
+        '''
+
+        # Drop the chain. Do not resolve a service and do not open a store.
+        self._open = None
+        return self
+
     # * method: create
-    def create(self, record: Any) -> Any:
+    def create(self, record: Any = None) -> Any:
         '''
         Create a plot or a matrix and return the kept record.
 
-        The handler calls the plot create event or the matrix create
-        event. The result is the record, not a picture.
+        An explicit record is the finished-record path. It does not read
+        the in-memory plot and does not drop it. With no argument, an
+        open plot that has at least one series is passed to the create
+        handler. The result is the record, not a picture.
 
-        :param record: The finished plot or matrix.
+        :param record: The finished plot or matrix. Omit to keep the open plot.
         :type record: Any
         :return: The kept record.
         :rtype: Any
         '''
+
+        # An explicit record always wins. The chain is not sent and not cleared.
+        if record is not None:
+            if self._create is None:
+                raise_unwired_handler_error(
+                    'create_handler',
+                    self.domain.id,
+                )
+            return self._create(record)
+
+        # A chain terminal needs an open plot that declaration would accept.
+        if self._open is None:
+            raise ValueError('create requires an open plot.')
+        if not self._open['series']:
+            raise ValueError('A draft with no series cannot be kept.')
 
         # An unwired create handler is a composition bug.
         if self._create is None:
@@ -299,8 +781,46 @@ class PlotterSessionContext(AppSessionContext):
                 self.domain.id,
             )
 
-        # The handler calls the create event. This method does not draw.
-        return self._create(record)
+        # The handler calls the create event. A failure leaves the chain.
+        kept = self._create(self._open['record'])
+
+        # Success drops the in-memory plot. The caller holds the kept record.
+        self._open = None
+        return kept
+
+    # * method: update
+    def update(self) -> Any:
+        '''
+        Keep an edit of the open plot and return the record.
+
+        The call resolves ``UpdatePlot`` on the plot flag. It does not
+        re-derive the id, does not insert, and does not fall through to
+        create. A failure leaves the in-memory plot.
+
+        :return: The kept record.
+        :rtype: Any
+        '''
+
+        # Update needs an open plot that declaration would accept.
+        if self._open is None:
+            raise ValueError('update requires an open plot.')
+        if not self._open['series']:
+            raise ValueError('A draft with no series cannot be kept.')
+
+        # Resolve the existing event. Do not construct it and do not open a store.
+        plot = self._open['record']
+        event = self.get_dependency(UPDATE_PLOT_EVENT_ID, PLOT_FLAG)
+        kept = event.execute(
+            id=plot.id,
+            name=plot.name,
+            kind=plot.kind,
+            series=plot.series,
+            description=plot.description,
+        )
+
+        # Success drops the in-memory plot. A failure does not reach here.
+        self._open = None
+        return kept
 
     # * method: show
     def show(self, record: Any) -> bytes:

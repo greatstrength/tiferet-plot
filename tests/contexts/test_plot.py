@@ -6,19 +6,23 @@
 import ast
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 # ** infra
 import pytest
+from pydantic import ValidationError
 
 # ** app
 from tiferet import TiferetAPIError
 from tiferet.contexts.app import AppSession, AppSessionContext
 from tiferet.contexts.core import BaseContext
+from tiferet.interfaces import ServiceError
 from tiferet_plot.contexts.plot import (
     CREATE_MATRIX_EVENT_ID,
     CREATE_PLOT_EVENT_ID,
     PLOT_FLAG,
     RENDERER_SERVICE_ID,
+    UPDATE_PLOT_EVENT_ID,
     PlotterSessionContext,
     create_handler,
     show_handler,
@@ -119,6 +123,44 @@ class RecordingRenderer:
 
 # *** functions
 
+# ** function: line_marks
+def line_marks(x=(1, 2), y=(3, 4)):
+    '''
+    Build numeric x and y marks.
+
+    :param x: The x values.
+    :type x: tuple
+    :param y: The y values.
+    :type y: tuple
+    :return: Marks for a line or scatter series.
+    :rtype: list
+    '''
+
+    # Return the two required roles.
+    return [
+        Mark(role='x', values=x),
+        Mark(role='y', values=y),
+    ]
+
+# ** function: bar_marks
+def bar_marks(category=('North', 'South'), height=(10, 12)):
+    '''
+    Build category and height marks.
+
+    :param category: The category labels.
+    :type category: tuple
+    :param height: The bar heights.
+    :type height: tuple
+    :return: Marks for a bar series.
+    :rtype: list
+    '''
+
+    # Return the two required roles.
+    return [
+        Mark(role='category', values=category),
+        Mark(role='height', values=height),
+    ]
+
 # ** function: line_plot
 def line_plot(kind='line', plot_id='sales_by_region'):
     '''
@@ -181,7 +223,7 @@ def matrix():
     )
 
 # ** function: bound
-def bound(create=None, show=None):
+def bound(create=None, show=None, get_dependency=None):
     '''
     Bind a plotter session without the blueprint.
 
@@ -189,17 +231,21 @@ def bound(create=None, show=None):
     :type create: Callable | None
     :param show: The show handler, or None when unwired.
     :type show: Callable | None
+    :param get_dependency: The DI resolver, or a no-op when omitted.
+    :type get_dependency: Callable | None
     :return: A session bound to an app session.
     :rtype: PlotterSessionContext
     '''
 
     # The five framework handlers are absent, so an unwired one still fails.
+    if get_dependency is None:
+        get_dependency = lambda *args, **kwargs: None
     return PlotterSessionContext.from_domain(
         AppSession(
             id='plotter',
             name='Plotter',
         ),
-        get_dependency=lambda *args, **kwargs: None,
+        get_dependency=get_dependency,
         create_handler=create,
         show_handler=show,
     )
@@ -257,6 +303,25 @@ def imported_modules(path: Path) -> list:
             names.append(node.module)
     return names
 
+# ** function: mark_values
+def mark_values(plot, index=0):
+    '''
+    Return the mark value tuples on one series.
+
+    :param plot: The plot record.
+    :type plot: Plot
+    :param index: The series index.
+    :type index: int
+    :return: Value tuples in mark order.
+    :rtype: list
+    '''
+
+    # Compare values, not mark object identity.
+    return [
+        tuple(mark.values)
+        for mark in plot.series[index].marks
+    ]
+
 # *** tests
 
 # ** test: context_extends_the_hub_and_omits_domain_type
@@ -271,7 +336,7 @@ def test_context_extends_the_hub_and_omits_domain_type():
     assert 'domain_type' not in PlotterSessionContext.__dict__
     assert BaseContext.for_domain(AppSession) is AppSessionContext
 
-    # Create and show are handlers. Fluent methods are not this session.
+    # Create and show are handlers. The chain is methods on this session.
     params = inspect.signature(PlotterSessionContext.__init__).parameters
     for name in (
         'build_logger_handler',
@@ -283,10 +348,20 @@ def test_context_extends_the_hub_and_omits_domain_type():
         'show_handler',
     ):
         assert name in params
-    assert not hasattr(PlotterSessionContext, 'add_series')
-    assert not hasattr(PlotterSessionContext, 'append')
+    assert 'update_handler' not in params
+    for name in (
+        'draft',
+        'edit',
+        'add_series',
+        'append',
+        'discard',
+        'update',
+    ):
+        assert hasattr(PlotterSessionContext, name)
+    assert not hasattr(context_module, 'PlotterFluentContext')
     assert not hasattr(PlotterSessionContext, 'show_line')
     assert not hasattr(PlotterSessionContext, 'show_bar')
+    assert not (Path(context_module.__file__).parent / 'fluent.py').exists()
 
 # ** test: unwired_handlers_fail
 def test_unwired_handlers_fail():
@@ -415,12 +490,618 @@ def test_session_does_not_import_the_drawing_tool_or_a_store():
     # Imports are the boundary. Naming a service id is not an import.
     imported = ' '.join(imported_modules(Path(context_module.__file__)))
     assert 'matplotlib' not in imported
+    assert 'mappers' not in imported
     assert 'repos' not in imported
     assert 'utils' not in imported
+    assert 'tiferet.di' not in imported
     source = Path(context_module.__file__).read_text()
     assert 'PlotConfigRepository' not in source
     assert 'MatrixConfigRepository' not in source
     assert 'MatplotlibRenderer' not in source
+    assert 'PlotterFluentContext' not in source
+    assert 'update_handler' not in source
     assert 'open(' not in source
-    assert 'add_series' not in source
-    assert 'def append' not in source
+
+# ** test: draft_and_add_series_settle_ids_once
+def test_draft_and_add_series_settle_ids_once():
+    '''
+    A line chain derives the plot id and the series id once, then keeps them.
+    '''
+
+    # The chain returns the session. Ids are settled before create.
+    session = bound(create=lambda record: record)
+    assert session.draft('Sales by Region', 'line') is session
+    assert session.add_series('Revenue', line_marks()) is session
+    assert session.add_series('Cost', line_marks(x=(7, 8), y=(9, 10))) is session
+    assert session.append('revenue', line_marks(x=(5,), y=(6,))) is session
+    kept = session.create()
+
+    # Later additions do not recompute the ids settled at draft and add_series.
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+    assert kept.series[1].id == 'cost'
+    assert mark_values(kept) == [(1, 2, 5), (3, 4, 6)]
+    assert mark_values(kept, index=1) == [(7, 8), (9, 10)]
+
+    # Success drops the in-memory plot.
+    assert session.draft('Other', 'bar') is session
+
+# ** test: supplied_ids_are_kept_and_blank_ids_are_derived
+def test_supplied_ids_are_kept_and_blank_ids_are_derived():
+    '''
+    A supplied id is kept. A blank id is derived, not stored as given.
+    '''
+
+    # A supplied plot id and a supplied series id are not rewritten.
+    session = bound(create=lambda record: record)
+    session.draft('Sales by Region', 'line', id='Custom-Id', description='A claim.')
+    session.add_series('Revenue', line_marks(), id='rev-1')
+    kept = session.create()
+    assert kept.id == 'Custom-Id'
+    assert kept.series[0].id == 'rev-1'
+    assert kept.description == 'A claim.'
+
+    # A blank id is the omitted case. The name still identifies the record.
+    session.draft('Sales by Region', 'line', id='   ')
+    session.add_series('Q3 Revenue', line_marks(), id='')
+    derived = session.create()
+    assert derived.id == 'sales_by_region'
+    assert derived.series[0].id == 'q3_revenue'
+
+    # A name that cannot identify the record still keeps a supplied id.
+    session.draft('!!!', 'line', id='kept')
+    session.add_series('Revenue', line_marks())
+    assert session.create().id == 'kept'
+
+# ** test: empty_derivation_opens_no_plot
+@pytest.mark.parametrize('name', ['---', '   ', '!!!'])
+def test_empty_derivation_opens_no_plot(name):
+    '''
+    A name that snake-cases to nothing, with no id, opens no plot.
+    '''
+
+    # The failure leaves the session able to open a different plot.
+    session = bound()
+    with pytest.raises(ValueError):
+        session.draft(name, 'line')
+    assert session.draft('Sales by Region', 'line') is session
+
+# ** test: add_series_rejects_illegal_marks_and_a_duplicate_id
+def test_add_series_rejects_illegal_marks_and_a_duplicate_id():
+    '''
+    Illegal marks add no series. A duplicate series id leaves the first series.
+    '''
+
+    # A line plot does not accept bar marks. The draft stays empty.
+    calls = []
+
+    def handler(record):
+        '''
+        Record a create and return the plot.
+
+        :param record: The plot passed to the handler.
+        :type record: Plot
+        :return: The same plot.
+        :rtype: Plot
+        '''
+
+        # An empty draft must not reach this handler.
+        calls.append(record)
+        return record
+
+    session = bound(create=handler)
+    session.draft('Sales by Region', 'line')
+    with pytest.raises(ValidationError):
+        session.add_series('Revenue', bar_marks())
+    with pytest.raises(ValueError):
+        session.create()
+    assert calls == []
+
+    # The first successful series stays when a second id collides.
+    session.add_series('Revenue', line_marks())
+    with pytest.raises(ValidationError):
+        session.add_series('Other', line_marks(), id='revenue')
+    with pytest.raises(ValidationError):
+        session.add_series('Revenue', line_marks())
+    kept = session.create()
+    assert len(kept.series) == 1
+    assert kept.series[0].id == 'revenue'
+    assert kept.series[0].name == 'Revenue'
+    assert kept.kind == 'line'
+
+# ** test: append_extends_one_series_and_keeps_the_kind_rules
+@pytest.mark.parametrize('kind,marks,added,expected', [
+    (
+        'line',
+        line_marks(),
+        line_marks(x=(5,), y=(6,)),
+        [(1, 2, 5), (3, 4, 6)],
+    ),
+    (
+        'scatter',
+        line_marks(),
+        line_marks(x=(5,), y=(6,)),
+        [(1, 2, 5), (3, 4, 6)],
+    ),
+    (
+        'bar',
+        bar_marks(),
+        bar_marks(category=('East',), height=(8,)),
+        [('North', 'South', 'East'), (10, 12, 8)],
+    ),
+])
+def test_append_extends_one_series_and_keeps_the_kind_rules(kind, marks, added, expected):
+    '''
+    Append adds the same non-empty count to every required role and keeps ids.
+    '''
+
+    # A second series of a different length must stay as it was.
+    session = bound(create=lambda record: record)
+    session.draft('Sales by Region', kind)
+    session.add_series('Revenue', marks)
+    other = line_marks(x=(1, 2, 3), y=(4, 5, 6)) if kind != 'bar' else bar_marks(
+        category=('A', 'B', 'C'),
+        height=(1, 2, 3),
+    )
+    session.add_series('Cost', other, id='cost')
+    assert session.append('revenue', added) is session
+    kept = session.create()
+
+    # The addressed series grew. The other series and both ids did not.
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+    assert kept.series[1].id == 'cost'
+    assert mark_values(kept) == expected
+    assert mark_values(kept, index=1) == [tuple(mark.values) for mark in other]
+
+# ** test: append_addresses_a_series_by_id
+def test_append_addresses_a_series_by_id():
+    '''
+    Two series may share a name. Append uses the id, not the name.
+    '''
+
+    # Both series are named Revenue. Only the addressed id grows.
+    session = bound(create=lambda record: record)
+    session.draft('Sales by Region', 'line')
+    session.add_series('Revenue', line_marks(), id='rev-a')
+    session.add_series('Revenue', line_marks(), id='rev-b')
+    session.append('rev-a', line_marks(x=(9,), y=(8,)))
+    kept = session.create()
+    assert kept.series[0].name == kept.series[1].name == 'Revenue'
+    assert mark_values(kept) == [(1, 2, 9), (3, 4, 8)]
+    assert mark_values(kept, index=1) == [(1, 2), (3, 4)]
+
+# ** test: append_failures_leave_the_marks_unchanged
+@pytest.mark.parametrize('kind,bad', [
+    ('line', [Mark(role='x', values=(5,)), Mark(role='y', values=(6, 7))]),
+    ('line', []),
+    ('line', [{'role': 'x', 'values': ()}, {'role': 'y', 'values': ()}]),
+    ('line', [Mark(role='x', values=(5,))]),
+    ('line', line_marks(x=(5,), y=(6,)) + [Mark(role='category', values=('East',))]),
+    ('line', [Mark(role='x', values=(5,)), Mark(role='y', values=('6',))]),
+    ('scatter', [Mark(role='x', values=(5,)), Mark(role='y', values=(6, 7))]),
+    ('bar', [Mark(role='category', values=('East',)), Mark(role='height', values=(1, 2))]),
+    ('line', bar_marks()),
+    ('bar', line_marks()),
+])
+def test_append_failures_leave_the_marks_unchanged(kind, bad):
+    '''
+    An illegal addition does not change the marks.
+    '''
+
+    # The original marks are what create still sees.
+    session = bound(create=lambda record: record)
+    original = bar_marks() if kind == 'bar' else line_marks()
+    session.draft('Sales by Region', kind)
+    session.add_series('Revenue', original)
+    with pytest.raises(ValidationError):
+        session.append('revenue', bad)
+    kept = session.create()
+    assert mark_values(kept) == [tuple(mark.values) for mark in original]
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+
+# ** test: append_of_an_unknown_series_leaves_the_marks_unchanged
+def test_append_of_an_unknown_series_leaves_the_marks_unchanged():
+    '''
+    An unknown series id fails, and the marks are unchanged.
+    '''
+
+    # The series is addressed by id. A name is not a key.
+    session = bound(create=lambda record: record)
+    session.draft('Sales by Region', 'line')
+    session.add_series('Revenue', line_marks())
+    with pytest.raises(ValueError):
+        session.append('missing', line_marks(x=(5,), y=(6,)))
+    kept = session.create()
+    assert mark_values(kept) == [(1, 2), (3, 4)]
+
+# ** test: create_keeps_the_chain_and_drops_it
+def test_create_keeps_the_chain_and_drops_it():
+    '''
+    create with no argument calls the create handler and returns its record.
+    '''
+
+    # The handler is the existing create path. The event sees the settled ids.
+    event = RecordingEvent(None)
+
+    def execute(**kwargs):
+        '''
+        Keep the arguments and return a record with those ids.
+
+        :param kwargs: The event arguments.
+        :type kwargs: dict
+        :return: The kept record.
+        :rtype: Plot
+        '''
+
+        # The chain passed the ids it already settled.
+        event.kwargs = kwargs
+        event.result = Plot(
+            id=kwargs['id'],
+            name=kwargs['name'],
+            kind=kwargs['kind'],
+            description=kwargs.get('description'),
+            series=kwargs['series'],
+        )
+        return event.result
+
+    event.execute = execute
+    get_dependency, calls = resolver({
+        CREATE_PLOT_EVENT_ID: event,
+    })
+    session = bound(create=create_handler(get_dependency))
+    session.draft('Sales by Region', 'line', description='A claim.')
+    session.add_series('Revenue', line_marks())
+    kept = session.create()
+
+    # The returned record is the event's record, and the chain is gone.
+    assert calls == [(CREATE_PLOT_EVENT_ID, (PLOT_FLAG,))]
+    assert kept is event.result
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+    assert kept.description == 'A claim.'
+    assert session.draft('Other', 'scatter') is session
+
+# ** test: create_of_an_empty_draft_does_not_call_the_handler
+def test_create_of_an_empty_draft_does_not_call_the_handler():
+    '''
+    create on a draft with no series does not call the create handler.
+    '''
+
+    # No open plot fails too, and also does not call the handler.
+    calls = []
+    session = bound(create=lambda record: calls.append(record))
+    with pytest.raises(ValueError):
+        session.create()
+    session.draft('Sales by Region', 'line')
+    with pytest.raises(ValueError):
+        session.create()
+    assert calls == []
+    with pytest.raises(ValueError):
+        session.draft('Other', 'line')
+
+# ** test: explicit_create_does_not_send_or_drop_the_draft
+def test_explicit_create_does_not_send_or_drop_the_draft():
+    '''
+    An explicit plot or matrix wins. The open draft is not sent and not dropped.
+    '''
+
+    # The draft has no series. The explicit records are what the handler sees.
+    plot = line_plot(plot_id='explicit')
+    grid = matrix()
+    plot_event = RecordingEvent('kept-plot')
+    matrix_event = RecordingEvent('kept-matrix')
+    get_dependency, calls = resolver({
+        CREATE_PLOT_EVENT_ID: plot_event,
+        CREATE_MATRIX_EVENT_ID: matrix_event,
+    })
+    session = bound(create=create_handler(get_dependency))
+    session.draft('Sales by Region', 'line')
+    assert session.create(plot) == 'kept-plot'
+    assert plot_event.kwargs['id'] == 'explicit'
+    assert session.create(grid) == 'kept-matrix'
+    assert matrix_event.kwargs['id'] == grid.id
+    assert calls == [
+        (CREATE_PLOT_EVENT_ID, (PLOT_FLAG,)),
+        (CREATE_MATRIX_EVENT_ID, (PLOT_FLAG,)),
+    ]
+
+    # The draft is still open, and a later chain create sends that draft.
+    with pytest.raises(ValueError):
+        session.draft('Other', 'bar')
+    session.add_series('Revenue', line_marks())
+    assert session.create() == 'kept-plot'
+    assert plot_event.kwargs['id'] == 'sales_by_region'
+    assert plot_event.kwargs['series'][0].id == 'revenue'
+
+# ** test: create_failure_leaves_the_chain
+def test_create_failure_leaves_the_chain():
+    '''
+    A failed create leaves the in-memory plot and does not call update.
+    '''
+
+    # The handler fails. The chain does not resolve UpdatePlot.
+    resolved = []
+
+    def get_dependency(*args, **kwargs):
+        '''
+        Fail if update resolves a service after a failed create.
+
+        :param args: Resolution arguments.
+        :type args: tuple
+        :param kwargs: Resolution keyword arguments.
+        :type kwargs: dict
+        '''
+
+        # Create does not fall through to update.
+        resolved.append(args)
+        raise AssertionError('resolved a service')
+
+    def handler(record):
+        '''
+        Fail the keep. The chain must remain.
+
+        :param record: The in-memory plot.
+        :type record: Plot
+        '''
+
+        # The store is the handler's concern. This stand-in does not insert.
+        raise RuntimeError('already kept')
+
+    session = bound(create=handler, get_dependency=get_dependency)
+    session.draft('Sales by Region', 'line').add_series('Revenue', line_marks())
+    with pytest.raises(RuntimeError):
+        session.create()
+    assert resolved == []
+    with pytest.raises(ValueError):
+        session.draft('Other', 'line')
+
+# ** test: update_calls_update_plot_and_drops_the_chain
+def test_update_calls_update_plot_and_drops_the_chain():
+    '''
+    update calls UpdatePlot with the open plot and does not change its id.
+    '''
+
+    # The event returns the record it was given. The chain returns that record.
+    event = RecordingEvent(None)
+
+    def execute(**kwargs):
+        '''
+        Record the call and return a record with the supplied id.
+
+        :param kwargs: The event arguments.
+        :type kwargs: dict
+        :return: The kept record.
+        :rtype: Plot
+        '''
+
+        # The id is the one the chain already settled.
+        event.kwargs = kwargs
+        event.result = Plot(
+            id=kwargs['id'],
+            name=kwargs['name'],
+            kind=kwargs['kind'],
+            description=kwargs.get('description'),
+            series=kwargs['series'],
+        )
+        return event.result
+
+    event.execute = execute
+    get_dependency, calls = resolver({
+        UPDATE_PLOT_EVENT_ID: event,
+    })
+    created = []
+    session = bound(
+        create=lambda record: created.append(record),
+        get_dependency=get_dependency,
+    )
+    session.draft('Sales by Region', 'line', id='Custom-Id')
+    session.add_series('Revenue', line_marks(), id='rev-1')
+    kept = session.update()
+
+    # Update does not create, and success drops the chain.
+    assert calls == [(UPDATE_PLOT_EVENT_ID, (PLOT_FLAG,))]
+    assert event.kwargs['id'] == 'Custom-Id'
+    assert event.kwargs['series'][0].id == 'rev-1'
+    assert kept is event.result
+    assert kept.id == 'Custom-Id'
+    assert created == []
+    assert session.draft('Other', 'bar') is session
+
+# ** test: update_failure_leaves_the_chain_and_does_not_insert
+def test_update_failure_leaves_the_chain_and_does_not_insert():
+    '''
+    A failed update leaves the in-memory plot. It does not insert.
+    '''
+
+    # The event refuses an id that is not kept. The chain does not create.
+    event = RecordingEvent(None)
+
+    def execute(**kwargs):
+        '''
+        Record the call and fail as an id that is not kept.
+
+        :param kwargs: The event arguments.
+        :type kwargs: dict
+        '''
+
+        # Nothing is inserted. The chain must keep its plot.
+        event.kwargs = kwargs
+        raise ServiceError(
+            'PLOT_NOT_KEPT',
+            message='Plot is not kept.',
+        )
+
+    event.execute = execute
+    get_dependency, calls = resolver({
+        UPDATE_PLOT_EVENT_ID: event,
+    })
+    created = []
+    session = bound(
+        create=lambda record: created.append(record) or record,
+        get_dependency=get_dependency,
+    )
+    session.draft('Sales by Region', 'line', id='missing')
+    session.add_series('Revenue', line_marks())
+    with pytest.raises(ServiceError):
+        session.update()
+
+    # The in-memory plot remains, and create was not used as a fallback.
+    assert calls == [(UPDATE_PLOT_EVENT_ID, (PLOT_FLAG,))]
+    assert event.kwargs['id'] == 'missing'
+    assert created == []
+    with pytest.raises(ValueError):
+        session.draft('Other', 'line')
+    kept = session.create()
+    assert kept.id == 'missing'
+    assert mark_values(kept) == [(1, 2), (3, 4)]
+
+# ** test: update_of_an_empty_draft_does_not_resolve_the_event
+def test_update_of_an_empty_draft_does_not_resolve_the_event():
+    '''
+    update on a draft with no series does not resolve UpdatePlot.
+    '''
+
+    # No open plot fails the same way: the event is not resolved.
+    def get_dependency(*args, **kwargs):
+        '''
+        Fail if an empty chain resolves a service.
+
+        :param args: Resolution arguments.
+        :type args: tuple
+        :param kwargs: Resolution keyword arguments.
+        :type kwargs: dict
+        '''
+
+        # A draft with no series is not an update.
+        raise AssertionError('resolved a service')
+
+    session = bound(get_dependency=get_dependency)
+    with pytest.raises(ValueError):
+        session.update()
+    session.draft('Sales by Region', 'line')
+    with pytest.raises(ValueError):
+        session.update()
+
+# ** test: edit_then_append_does_not_recompute_ids_or_mutate_the_caller
+def test_edit_then_append_does_not_recompute_ids_or_mutate_the_caller():
+    '''
+    edit keeps the caller's ids, holds its own record, and does not load a plot.
+    '''
+
+    # Resolution must not run. edit does not call GetPlot.
+    def get_dependency(*args, **kwargs):
+        '''
+        Fail if edit or append resolves a service.
+
+        :param args: Resolution arguments.
+        :type args: tuple
+        :param kwargs: Resolution keyword arguments.
+        :type kwargs: dict
+        '''
+
+        # The caller already holds the plot. Do not load it.
+        raise AssertionError('resolved a service')
+
+    original = line_plot(plot_id='Custom-Id')
+    before = original.model_dump()
+    session = bound(
+        create=lambda record: record,
+        get_dependency=get_dependency,
+    )
+    assert session.edit(original) is session
+    session.append('revenue', line_marks(x=(5,), y=(6,)))
+    kept = session.create()
+
+    # The chain's record grew. The object the caller passed did not.
+    assert kept is not original
+    assert kept.id == 'Custom-Id'
+    assert kept.series[0].id == 'revenue'
+    assert mark_values(kept) == [(1, 2, 5), (3, 4, 6)]
+    assert original.model_dump() == before
+
+# ** test: edit_of_a_matrix_or_an_invalid_plot_opens_nothing
+def test_edit_of_a_matrix_or_an_invalid_plot_opens_nothing():
+    '''
+    edit of a matrix fails. A plot that fails the record checks opens nothing.
+    '''
+
+    # A matrix has no kind. An empty series list is not a plot record.
+    session = bound()
+    with pytest.raises(ValueError):
+        session.edit(matrix())
+    with pytest.raises(ValidationError):
+        session.edit(SimpleNamespace(
+            id='sales_by_region',
+            name='Sales by Region',
+            kind='line',
+            description=None,
+            series=[],
+        ))
+    assert session.draft('Sales by Region', 'line') is session
+
+# ** test: a_second_draft_fails_and_discard_drops_the_chain
+def test_a_second_draft_fails_and_discard_drops_the_chain():
+    '''
+    A second draft leaves the first plot. discard drops it and calls no event.
+    '''
+
+    # Discard must not resolve a service, including a removal.
+    resolved = []
+
+    def get_dependency(*args, **kwargs):
+        '''
+        Fail if discard resolves a service.
+
+        :param args: Resolution arguments.
+        :type args: tuple
+        :param kwargs: Resolution keyword arguments.
+        :type kwargs: dict
+        '''
+
+        # discard is not a removal of a kept record.
+        resolved.append(args)
+        raise AssertionError('resolved a service')
+
+    session = bound(
+        create=lambda record: record,
+        get_dependency=get_dependency,
+    )
+    session.draft('Sales by Region', 'line')
+    with pytest.raises(ValueError):
+        session.draft('Other', 'bar')
+    with pytest.raises(ValueError):
+        session.edit(line_plot(plot_id='other'))
+    session.add_series('Revenue', line_marks())
+    assert session.discard() is session
+    with pytest.raises(ValueError):
+        session.create()
+    assert resolved == []
+
+    # The first plot was dropped, so a new draft can open.
+    session.draft('Other', 'bar')
+    session.add_series('Revenue', bar_marks())
+    kept = session.create()
+    assert kept.id == 'other'
+    assert kept.kind == 'bar'
+
+# ** test: show_does_not_read_or_drop_an_open_draft
+def test_show_does_not_read_or_drop_an_open_draft():
+    '''
+    show of an explicit plot, while a draft is open, returns that picture.
+    '''
+
+    # The renderer sees the explicit plot. The draft stays open.
+    explicit = line_plot(plot_id='explicit')
+    renderer = RecordingRenderer()
+    get_dependency, calls = resolver({
+        RENDERER_SERVICE_ID: renderer,
+    })
+    session = bound(show=show_handler(get_dependency))
+    session.draft('Draft Name', 'line')
+    assert session.show(explicit) == b'plot-png'
+    assert renderer.calls == [('render', explicit)]
+    assert calls == [(RENDERER_SERVICE_ID, (PLOT_FLAG,))]
+    with pytest.raises(ValueError):
+        session.draft('Other', 'line')
