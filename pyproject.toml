@@ -1,0 +1,38 @@
+[project]
+name = "tiferet-plot"
+version = "0.0.0"
+description = "A Tiferet library for defining, persisting, and rendering plots, with Matplotlib as the first renderer."
+authors = [
+    { name = "Andrew Shatz, Great Strength Systems", email = "andrew@greatstrength.me" }
+]
+license = { text = "BSD-3-Clause" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tiferet>=2.1.1",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/greatstrength/tiferet-plot"
+Repository = "https://github.com/greatstrength/tiferet-plot"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "tiferet_plot",
+    "tiferet_plot.domain",
+    "tiferet_plot.mappers",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
