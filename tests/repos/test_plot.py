@@ -430,7 +430,7 @@ def test_repository_is_not_exported_and_does_not_import_matplotlib():
     assert not hasattr(repos_package, 'PlotConfigRepository')
     assert issubclass(PlotConfigRepository, PlotService)
 
-    # No plot module imports Matplotlib or derives an id.
+    # The repository does not derive an id. Only the renderer utility imports Matplotlib.
     root = Path(tiferet_plot.__file__).parent
     for path in root.rglob('*.py'):
         source = path.read_text()
@@ -441,7 +441,9 @@ def test_repository_is_not_exported_and_does_not_import_matplotlib():
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names.append(node.module)
         imported = ' '.join(names)
-        assert 'matplotlib' not in imported
+        renderer = path.name == 'plot.py' and path.parent.name == 'utils'
+        if not renderer:
+            assert 'matplotlib' not in imported
         if path.name == 'plot.py' and path.parent.name == 'repos':
             assert '_snake_case' not in source
             assert '_fill_id' not in source
