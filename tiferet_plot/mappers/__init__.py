@@ -4,8 +4,12 @@
 
 # ** app
 from .plot import (
+    MatrixCellAggregate,
+    MatrixCellConfigObject,
+    MatrixConfigObject,
     PlotAggregate,
     PlotConfigObject,
+    PlotMatrixAggregate,
     SeriesAggregate,
     SeriesConfigObject,
 )
@@ -13,8 +17,12 @@ from .plot import (
 # *** exports
 
 __all__ = [
+    'MatrixCellAggregate',
+    'MatrixCellConfigObject',
+    'MatrixConfigObject',
     'PlotAggregate',
     'PlotConfigObject',
+    'PlotMatrixAggregate',
     'SeriesAggregate',
     'SeriesConfigObject',
 ]

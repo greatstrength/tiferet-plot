@@ -229,6 +229,77 @@ def _validate_marks(kind: str, marks: Sequence[Mark]) -> None:
     if len(set(lengths)) != 1:
         raise ValueError('Mark value sequences must have equal length.')
 
+# ** function: _require_plot_id
+def _require_plot_id(plot: Any) -> None:
+    '''
+    Fail when a cell plot has no id.
+
+    Matrix declaration does not derive a plot id from the plot name.
+    A missing id and a blank id are the same failure.
+
+    :param plot: The raw cell plot.
+    :type plot: Any
+    :return: None
+    :rtype: None
+    '''
+
+    # A mapping is the declaration form. Do not fill a missing id.
+    if isinstance(plot, dict):
+        if _is_blank(plot.get('id')):
+            raise ValueError(
+                'A cell plot requires an id. Declaration does not derive one.'
+            )
+        return
+
+    # A record that already exists must already carry an id.
+    if plot is not None and not isinstance(plot, str) and hasattr(plot, 'id'):
+        if _is_blank(plot.id):
+            raise ValueError(
+                'A cell plot requires an id. Declaration does not derive one.'
+            )
+        return
+
+    # A bare id is not a plot record. Leave other shapes for field validation.
+    if isinstance(plot, str):
+        raise ValueError('A cell carries a plot record, not an id.')
+
+# ** function: _validate_cell_positions
+def _validate_cell_positions(
+        rows: int,
+        cols: int,
+        cells: Sequence[MatrixCell],
+    ) -> None:
+    '''
+    Require every cell to sit in the declared grid, and not on another cell.
+
+    An empty corner is the absence of a cell. The author declared the grid.
+    Rows and columns are not computed from the occupied cells.
+
+    :param rows: The declared row count.
+    :type rows: int
+    :param cols: The declared column count.
+    :type cols: int
+    :param cells: The occupied cells.
+    :type cells: Sequence[MatrixCell]
+    :return: None
+    :rtype: None
+    '''
+
+    # Two placements may share a plot id. They may not share a position.
+    seen = set()
+    for cell in cells:
+        if cell.row >= rows or cell.col >= cols:
+            raise ValueError(
+                f'Cell at row {cell.row}, column {cell.col} is outside '
+                f'a {rows} by {cols} grid.'
+            )
+        position = (cell.row, cell.col)
+        if position in seen:
+            raise ValueError(
+                f'Two cells share row {cell.row} and column {cell.col}.'
+            )
+        seen.add(position)
+
 # ** function: _validate_series
 def _validate_series(kind: str, series: Sequence[Series]) -> None:
     '''
@@ -414,6 +485,145 @@ class Plot(DomainObject):
 
         # Duplicate series ids and illegal marks fail at declaration.
         _validate_series(self.kind, self.series)
+
+        # Return the declared record. Nothing has been drawn or saved.
+        return self
+
+# ** model: matrix_cell
+class MatrixCell(DomainObject):
+    '''
+    A cell places one plot on a declared grid.
+
+    The plot is the declared record, carried on the cell. An empty position
+    is the absence of a cell, not a cell with nothing in it.
+    '''
+
+    # * attribute: row
+    row: int = Field(
+        ...,
+        ge=0,
+        description='The zero-based row this plot occupies.',
+    )
+
+    # * attribute: col
+    col: int = Field(
+        ...,
+        ge=0,
+        description='The zero-based column this plot occupies.',
+    )
+
+    # * attribute: plot
+    plot: Plot = Field(
+        ...,
+        description='The plot record placed in this cell. Not a bare id.',
+    )
+
+    # * method: _require_plot_id (model validator)
+    @model_validator(mode='before')
+    @classmethod
+    def _require_plot_id(cls, data: Any) -> Any:
+        '''
+        Reject a cell plot whose id is missing or blank.
+
+        Declaration does not fill that id from the plot name.
+
+        :param data: The raw cell input.
+        :type data: Any
+        :return: The cell input, unchanged when the plot id is present.
+        :rtype: Any
+        '''
+
+        # Leave non-mapping input for Pydantic to reject.
+        if not isinstance(data, dict):
+            return data
+
+        # A missing plot is a required-field failure, not an id failure.
+        if 'plot' not in data:
+            return data
+
+        # Do not derive a plot id. A blank id is not a supplied id.
+        _require_plot_id(data.get('plot'))
+        return data
+
+# ** model: plot_matrix
+class PlotMatrix(DomainObject):
+    '''
+    A plot matrix is a declared grid of plots, not a fourth chart kind.
+
+    It names which plots occupy which row and column. The picture of that
+    grid is not part of the record, and neither is the tool that draws it.
+    '''
+
+    # * attribute: id
+    id: str = Field(
+        ...,
+        description='The matrix identity. Derived from name when omitted.',
+    )
+
+    # * attribute: name
+    name: str = Field(
+        ...,
+        description='The author\'s name for the matrix.',
+    )
+
+    # * attribute: description
+    description: str | None = Field(
+        default=None,
+        description='Optional claim text. Not used to derive the id.',
+    )
+
+    # * attribute: rows
+    rows: int = Field(
+        ...,
+        ge=1,
+        description='The declared number of rows. At least one. Not inferred.',
+    )
+
+    # * attribute: cols
+    cols: int = Field(
+        ...,
+        ge=1,
+        description='The declared number of columns. At least one. Not inferred.',
+    )
+
+    # * attribute: cells
+    cells: list[MatrixCell] = Field(
+        ...,
+        min_length=1,
+        description='The occupied cells. An empty corner is not a cell.',
+    )
+
+    # * method: _derive_id (model validator)
+    @model_validator(mode='before')
+    @classmethod
+    def _derive_id(cls, data: Any) -> Any:
+        '''
+        Derive a missing matrix id from its name.
+
+        The rule is the plot id rule. A supplied id is kept. A cell plot
+        id is not derived here.
+
+        :param data: The raw matrix input.
+        :type data: Any
+        :return: The matrix input, with id filled when it was omitted.
+        :rtype: Any
+        '''
+
+        # Fill a missing id once. A supplied id is kept as given.
+        return _fill_id(data)
+
+    # * method: _validate_grid (model validator)
+    @model_validator(mode='after')
+    def _validate_grid(self) -> PlotMatrix:
+        '''
+        Check that each cell sits in the declared grid and on its own position.
+
+        :return: The validated matrix.
+        :rtype: PlotMatrix
+        '''
+
+        # The author declared the grid. Do not shrink it to the occupied cells.
+        _validate_cell_positions(self.rows, self.cols, self.cells)
 
         # Return the declared record. Nothing has been drawn or saved.
         return self

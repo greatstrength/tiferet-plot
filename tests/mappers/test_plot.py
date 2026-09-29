@@ -9,7 +9,9 @@ from pydantic import ValidationError
 # ** app
 from tiferet_plot.domain.plot import Mark
 from tiferet_plot.mappers.plot import (
+    MatrixConfigObject,
     PlotAggregate,
+    PlotMatrixAggregate,
     SeriesAggregate,
 )
 
@@ -135,3 +137,96 @@ def test_plot_replace_marks_rechecks_kind_and_keeps_ids(plot: PlotAggregate):
         )
     assert plot.series[0].marks[0].values == (9, 8, 7)
     assert plot.series[0].id == 'revenue'
+
+# ** test: rename_does_not_recompute_matrix_id
+def test_rename_does_not_recompute_matrix_id():
+    '''
+    Renaming a matrix does not recompute its id or a cell plot id.
+    '''
+
+    # Declare a grid. The matrix id comes from the name. The plot id is supplied.
+    matrix = PlotMatrixAggregate(
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            {
+                'row': 0,
+                'col': 0,
+                'plot': {
+                    'id': 'revenue_plot',
+                    'name': 'Revenue',
+                    'kind': 'line',
+                    'series': [
+                        SeriesAggregate(name='Revenue', marks=line_marks()),
+                    ],
+                },
+            },
+        ],
+    )
+    assert matrix.id == 'sales_by_region'
+    assert matrix.cells[0].plot.id == 'revenue_plot'
+
+    # Rename the matrix.
+    matrix.rename('Quarterly Sales')
+
+    # The name changes. Neither id does.
+    assert matrix.name == 'Quarterly Sales'
+    assert matrix.id == 'sales_by_region'
+    assert matrix.cells[0].plot.id == 'revenue_plot'
+
+# ** test: matrix_file_shape_keeps_the_plot_id_and_drops_the_matrix_id
+def test_matrix_file_shape_keeps_the_plot_id_and_drops_the_matrix_id():
+    '''
+    The stored body excludes the matrix id and keeps the cell plot id.
+    '''
+
+    # Build the record, then the file shape. Do not hand-serialize.
+    matrix = PlotMatrixAggregate(
+        id='Custom-Id',
+        name='Sales by Region',
+        description='A grid of claims.',
+        rows=2,
+        cols=2,
+        cells=[
+            {
+                'row': 0,
+                'col': 1,
+                'plot': {
+                    'id': 'revenue_plot',
+                    'name': 'Revenue',
+                    'kind': 'line',
+                    'description': 'Revenue compared across regions.',
+                    'series': [
+                        {
+                            'id': 'rev-1',
+                            'name': 'Revenue',
+                            'marks': line_marks(),
+                        },
+                    ],
+                },
+            },
+        ],
+    )
+    stored = MatrixConfigObject.from_model(matrix).to_primitive('to_data')
+
+    # The matrix id is the key, not a body field. The plot id stays in the cell.
+    assert 'id' not in stored
+    assert 'renderer' not in stored
+    assert 'file_path' not in stored
+    assert stored['cells'][0]['plot']['id'] == 'revenue_plot'
+    assert stored['cells'][0]['plot']['series'][0]['id'] == 'rev-1'
+
+    # Load injects the key, then maps. The plot id comes back from the cell body.
+    loaded = MatrixConfigObject.model_validate({
+        **stored,
+        'id': 'Custom-Id',
+    }).map()
+    assert loaded.id == 'Custom-Id'
+    assert loaded.name == 'Sales by Region'
+    assert loaded.description == 'A grid of claims.'
+    assert loaded.cells[0].row == 0
+    assert loaded.cells[0].col == 1
+    assert loaded.cells[0].plot.id == 'revenue_plot'
+    assert loaded.cells[0].plot.kind == 'line'
+    assert loaded.cells[0].plot.series[0].marks[0].values == (1, 2)

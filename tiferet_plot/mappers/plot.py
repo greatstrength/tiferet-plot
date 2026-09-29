@@ -11,7 +11,7 @@ from pydantic import Field
 
 # ** app
 from tiferet.mappers import Aggregate, TransferObject
-from ..domain.plot import Mark, Plot, Series
+from ..domain.plot import Mark, MatrixCell, Plot, PlotMatrix, Series
 
 # *** mappers
 
@@ -245,6 +245,174 @@ class PlotConfigObject(Plot, TransferObject):
             series=[
                 SeriesConfigObject.from_model(series)
                 for series in plot.series
+            ],
+            **overrides,
+        )
+
+# ** mapper: matrix_cell_aggregate
+class MatrixCellAggregate(MatrixCell, Aggregate):
+    '''
+    The mutable face of one cell placement.
+
+    The plot stays the record the cell carries. Moving the cell or
+    replacing that plot is an edit of the matrix, not a new kind.
+    '''
+
+# ** mapper: plot_matrix_aggregate
+class PlotMatrixAggregate(PlotMatrix, Aggregate):
+    '''
+    The mutable face of a declared matrix.
+
+    A rename changes what the author calls the grid. It does not
+    recompute the id, and it does not draw or save.
+    '''
+
+    # * method: rename
+    def rename(self, name: str) -> None:
+        '''
+        Rename the matrix without recomputing its id.
+
+        :param name: The new matrix name.
+        :type name: str
+        :return: None
+        :rtype: None
+        '''
+
+        # Assign the name. Identity was fixed at declaration.
+        self.name = name
+
+# ** mapper: matrix_cell_config_object
+class MatrixCellConfigObject(MatrixCell, TransferObject):
+    '''
+    The file shape of one cell inside its matrix.
+
+    The cell stores the plot record, including the plot id. There is no
+    plots key to restore that id from.
+    '''
+
+    # * attribute: _ROLES
+    _ROLES: ClassVar[Dict[str, Dict[str, Any]]] = {
+        'to_model': {
+            'exclude': {'plot'},
+        },
+        'to_data': {
+            'by_alias': True,
+            'mode': 'json',
+        },
+    }
+
+    # * attribute: plot
+    plot: PlotConfigObject = Field(
+        ...,
+        description='The plot record nested in this cell, including its id.',
+    )
+
+    # * method: map
+    def map(self, **overrides) -> MatrixCellAggregate:
+        '''
+        Map the cell file shape to a cell aggregate.
+
+        :param overrides: Field values that replace the serialized shape.
+        :type overrides: dict
+        :return: The cell aggregate.
+        :rtype: MatrixCellAggregate
+        '''
+
+        # Map the nested plot, then the cell. The plot id is already on the body.
+        return super().map(
+            MatrixCellAggregate,
+            plot=self.plot.map(),
+            **overrides,
+        )
+
+    # * method: from_model
+    @classmethod
+    def from_model(cls, cell: MatrixCell, **overrides) -> 'MatrixCellConfigObject':
+        '''
+        Create a cell file shape from a cell record.
+
+        :param cell: The cell record.
+        :type cell: MatrixCell
+        :param overrides: Field values that replace the record.
+        :type overrides: dict
+        :return: The cell file shape.
+        :rtype: MatrixCellConfigObject
+        '''
+
+        # Convert the plot, then the cell. This does not derive a plot id.
+        return super().from_model(
+            cell,
+            plot=PlotConfigObject.from_model(cell.plot),
+            **overrides,
+        )
+
+# ** mapper: matrix_config_object
+class MatrixConfigObject(PlotMatrix, TransferObject):
+    '''
+    The file shape of a matrix record, not a second record and not a picture.
+
+    The matrix id is the file key, so ``to_data`` excludes it. Cells, and
+    the plot records they carry, stay in the body. The body does not keep
+    a renderer or a store handle.
+    '''
+
+    # * attribute: _ROLES
+    _ROLES: ClassVar[Dict[str, Dict[str, Any]]] = {
+        'to_model': {
+            'exclude': {'cells'},
+        },
+        'to_data': {
+            'by_alias': True,
+            'exclude': {'id'},
+            'mode': 'json',
+        },
+    }
+
+    # * attribute: cells
+    cells: list[MatrixCellConfigObject] = Field(
+        ...,
+        min_length=1,
+        description='The cells nested in this matrix entry.',
+    )
+
+    # * method: map
+    def map(self, **overrides) -> PlotMatrixAggregate:
+        '''
+        Map the matrix file shape to a matrix aggregate.
+
+        :param overrides: Field values that replace the serialized shape.
+        :type overrides: dict
+        :return: The matrix aggregate.
+        :rtype: PlotMatrixAggregate
+        '''
+
+        # Map nested cells, then the matrix. The matrix id is injected by the store.
+        return super().map(
+            PlotMatrixAggregate,
+            cells=[cell.map() for cell in self.cells],
+            **overrides,
+        )
+
+    # * method: from_model
+    @classmethod
+    def from_model(cls, matrix: PlotMatrix, **overrides) -> 'MatrixConfigObject':
+        '''
+        Create a matrix file shape from a matrix record.
+
+        :param matrix: The matrix record.
+        :type matrix: PlotMatrix
+        :param overrides: Field values that replace the record.
+        :type overrides: dict
+        :return: The matrix file shape.
+        :rtype: MatrixConfigObject
+        '''
+
+        # Convert each cell, then the matrix. This does not derive an id.
+        return super().from_model(
+            matrix,
+            cells=[
+                MatrixCellConfigObject.from_model(cell)
+                for cell in matrix.cells
             ],
             **overrides,
         )
