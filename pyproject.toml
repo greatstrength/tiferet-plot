@@ -30,14 +30,14 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = [
     "tiferet_plot",
+    "tiferet_plot.blueprints",
+    "tiferet_plot.contexts",
     "tiferet_plot.domain",
     "tiferet_plot.events",
     "tiferet_plot.interfaces",
     "tiferet_plot.mappers",
     "tiferet_plot.repos",
     "tiferet_plot.utils",
-    "tiferet_plot.contexts",
-    "tiferet_plot.blueprints",
 ]
 
 [tool.pytest.ini_options]
