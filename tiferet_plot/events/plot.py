@@ -1,15 +1,18 @@
-"""Plot events."""
+"""Plot and matrix events."""
 
 # *** imports
 
 # ** app
 from tiferet.events import DomainEvent
 from ..interfaces.plot import (
+    MATRIX_ALREADY_KEPT_ID,
+    MATRIX_NOT_KEPT_ID,
     PLOT_ALREADY_KEPT_ID,
     PLOT_NOT_KEPT_ID,
+    MatrixService,
     PlotService,
 )
-from ..mappers.plot import PlotAggregate
+from ..mappers.plot import PlotAggregate, PlotMatrixAggregate
 
 # *** events
 
@@ -249,4 +252,246 @@ class RemovePlot(PlotEvent):
         self.plot_service.delete(id)
 
         # Return the id. Not the deleted record, and not a picture.
+        return id
+
+# ** event: matrix_event
+class MatrixEvent(DomainEvent):
+    '''
+    Base event for keeping a declared grid.
+
+    It holds the matrix service and nothing else. It does not hold the
+    plot service, and it does not open a file.
+    '''
+
+    # * attribute: matrix_service
+    matrix_service: MatrixService
+
+    # * init
+    def __init__(self, matrix_service: MatrixService) -> None:
+        '''
+        Initialize the matrix event with its service.
+
+        :param matrix_service: The matrix service.
+        :type matrix_service: MatrixService
+        '''
+
+        # Set the matrix service dependency.
+        self.matrix_service = matrix_service
+
+# ** event: create_matrix
+class CreateMatrix(MatrixEvent):
+    '''
+    Declare a matrix and keep it.
+
+    Create returns the record. It does not return a picture.
+    '''
+
+    # * method: execute
+    @DomainEvent.parameters_required(['name', 'rows', 'cols', 'cells'])
+    def execute(self,
+            name: str,
+            rows: int,
+            cols: int,
+            cells: list,
+            id: str | None = None,
+            description: str | None = None,
+            **kwargs,
+        ) -> PlotMatrixAggregate:
+        '''
+        Declare a matrix, then insert it.
+
+        An id already kept fails before save and leaves the first matrix
+        unchanged. Save failing because the id exists is that same failure.
+
+        :param name: The author's name for the matrix.
+        :type name: str
+        :param rows: The declared row count.
+        :type rows: int
+        :param cols: The declared column count.
+        :type cols: int
+        :param cells: The occupied cells, each carrying a plot record.
+        :type cells: list
+        :param id: The matrix id. Derived from the name when omitted.
+        :type id: str | None
+        :param description: Optional claim text. Not identity.
+        :type description: str | None
+        :param kwargs: Additional keyword arguments.
+        :type kwargs: dict
+        :return: The kept matrix.
+        :rtype: PlotMatrixAggregate
+        '''
+
+        # Declare the grid. A bad cell fails here and is not saved.
+        matrix = PlotMatrixAggregate(
+            name=name,
+            rows=rows,
+            cols=cols,
+            cells=cells,
+            id=id,
+            description=description,
+        )
+
+        # An id already kept is the same failure as a rejected save.
+        self.verify(
+            not self.matrix_service.exists(matrix.id),
+            MATRIX_ALREADY_KEPT_ID,
+            message=f'Matrix {matrix.id!r} is already kept.',
+            matrix_id=matrix.id,
+        )
+
+        # Insert the declared record. Do not draw it.
+        self.matrix_service.save(matrix)
+
+        # Return the matrix. The picture is a later call.
+        return matrix
+
+# ** event: get_matrix
+class GetMatrix(MatrixEvent):
+    '''
+    Load one kept matrix by the id it already has.
+
+    A missing id fails. The name is not an id.
+    '''
+
+    # * method: execute
+    @DomainEvent.parameters_required(['id'])
+    def execute(self, id: str, **kwargs) -> PlotMatrixAggregate:
+        '''
+        Return the kept matrix.
+
+        :param id: The matrix id. Not derived from a name.
+        :type id: str
+        :param kwargs: Additional keyword arguments.
+        :type kwargs: dict
+        :return: The kept matrix.
+        :rtype: PlotMatrixAggregate
+        '''
+
+        # Load through the service. Do not derive an id from a name.
+        matrix = self.matrix_service.get(id)
+
+        # A missing id fails. The caller does not interpret nothing.
+        self.verify(
+            matrix is not None,
+            MATRIX_NOT_KEPT_ID,
+            message=f'Matrix {id!r} is not kept.',
+            matrix_id=id,
+        )
+
+        # Return the record. Not a picture.
+        return matrix
+
+# ** event: list_matrices
+class ListMatrices(MatrixEvent):
+    '''
+    Return the kept matrices.
+
+    An empty store is an empty list, not a sentence and not a picture.
+    '''
+
+    # * method: execute
+    def execute(self, **kwargs) -> list[PlotMatrixAggregate]:
+        '''
+        Return the service list.
+
+        :param kwargs: Additional keyword arguments.
+        :type kwargs: dict
+        :return: The kept matrices.
+        :rtype: list[PlotMatrixAggregate]
+        '''
+
+        # Return records. Do not format them for display.
+        return self.matrix_service.list()
+
+# ** event: update_matrix
+class UpdateMatrix(MatrixEvent):
+    '''
+    Replace one kept matrix.
+
+    Update re-checks the declaration rules and does not re-derive the
+    matrix id or any plot id. A missing id fails and does not insert.
+    '''
+
+    # * method: execute
+    @DomainEvent.parameters_required(['id', 'name', 'rows', 'cols', 'cells'])
+    def execute(self,
+            id: str,
+            name: str,
+            rows: int,
+            cols: int,
+            cells: list,
+            description: str | None = None,
+            **kwargs,
+        ) -> PlotMatrixAggregate:
+        '''
+        Re-declare a kept matrix and replace it.
+
+        :param id: The matrix id already kept. Not recomputed from the name.
+        :type id: str
+        :param name: The replacement name.
+        :type name: str
+        :param rows: The declared row count.
+        :type rows: int
+        :param cols: The declared column count.
+        :type cols: int
+        :param cells: The replacement cells. Each plot id must already be set.
+        :type cells: list
+        :param description: Optional claim text. Not identity.
+        :type description: str | None
+        :param kwargs: Additional keyword arguments.
+        :type kwargs: dict
+        :return: The replacement matrix.
+        :rtype: PlotMatrixAggregate
+        '''
+
+        # Re-check the declaration. The supplied id is kept.
+        matrix = PlotMatrixAggregate(
+            id=id,
+            name=name,
+            rows=rows,
+            cols=cols,
+            cells=cells,
+            description=description,
+        )
+
+        # A missing id fails before update and does not insert.
+        self.verify(
+            self.matrix_service.exists(matrix.id),
+            MATRIX_NOT_KEPT_ID,
+            message=f'Matrix {matrix.id!r} is not kept.',
+            matrix_id=matrix.id,
+        )
+
+        # Replace the kept record. Do not draw it.
+        self.matrix_service.update(matrix)
+
+        # Return the replacement. Not a picture.
+        return matrix
+
+# ** event: remove_matrix
+class RemoveMatrix(MatrixEvent):
+    '''
+    Remove a matrix by id.
+
+    Remove is idempotent. It does not return the deleted matrix.
+    '''
+
+    # * method: execute
+    @DomainEvent.parameters_required(['id'])
+    def execute(self, id: str, **kwargs) -> str:
+        '''
+        Delete a matrix by id.
+
+        :param id: The matrix id.
+        :type id: str
+        :param kwargs: Additional keyword arguments.
+        :type kwargs: dict
+        :return: The id that was removed, or that was already absent.
+        :rtype: str
+        '''
+
+        # Delete is idempotent. A missing id changes nothing.
+        self.matrix_service.delete(id)
+
+        # Return the id. Not the deleted matrix, and not a picture.
         return id

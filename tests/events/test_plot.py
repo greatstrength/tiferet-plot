@@ -1,4 +1,4 @@
-"""Tests for creating, loading, and removing a plot."""
+"""Tests for creating a plot and a plot matrix."""
 
 # *** imports
 
@@ -17,19 +17,28 @@ from tiferet.events import DomainEvent
 from tiferet.interfaces import ServiceError
 from tiferet_plot.domain.plot import Mark, Series
 from tiferet_plot.events.plot import (
+    CreateMatrix,
     CreatePlot,
+    GetMatrix,
     GetPlot,
+    ListMatrices,
     ListPlots,
+    MatrixEvent,
     PlotEvent,
+    RemoveMatrix,
     RemovePlot,
+    UpdateMatrix,
     UpdatePlot,
 )
 from tiferet_plot.interfaces.plot import (
+    MATRIX_ALREADY_KEPT_ID,
+    MATRIX_NOT_KEPT_ID,
     PLOT_ALREADY_KEPT_ID,
     PLOT_NOT_KEPT_ID,
+    MatrixService,
     PlotService,
 )
-from tiferet_plot.mappers.plot import PlotAggregate
+from tiferet_plot.mappers.plot import PlotAggregate, PlotMatrixAggregate
 import tiferet_plot.events.plot as events_module
 
 # *** classes
@@ -151,6 +160,123 @@ class FakePlotService(PlotService):
         # Pop is idempotent. Series live inside the record.
         self.records.pop(id, None)
 
+# ** class: memory_matrix_service
+class MemoryMatrixService(MatrixService):
+    '''
+    An in-memory matrix service for event tests.
+
+    It records save and update calls so a failed declaration can prove
+    it did not keep anything.
+    '''
+
+    # * init
+    def __init__(self) -> None:
+        '''
+        Start with no kept records.
+        '''
+
+        # The records are keyed by matrix id.
+        self.records = {}
+        self.saves = []
+        self.updates = []
+
+    # * method: exists
+    def exists(self, id: str) -> bool:
+        '''
+        Check whether the id is kept.
+
+        :param id: The matrix id.
+        :type id: str
+        :return: True when get would return a record.
+        :rtype: bool
+        '''
+
+        # Exists follows get.
+        return self.get(id) is not None
+
+    # * method: get
+    def get(self, id: str):
+        '''
+        Return the kept matrix, or nothing.
+
+        :param id: The matrix id.
+        :type id: str
+        :return: The matrix, or None.
+        :rtype: PlotMatrixAggregate | None
+        '''
+
+        # A missing id is nothing, not an error.
+        return self.records.get(id)
+
+    # * method: list
+    def list(self):
+        '''
+        Return the kept records.
+
+        :return: The kept matrices.
+        :rtype: list
+        '''
+
+        # Return records, not a display string.
+        return list(self.records.values())
+
+    # * method: save
+    def save(self, matrix: PlotMatrixAggregate) -> None:
+        '''
+        Insert a matrix whose id is not kept.
+
+        :param matrix: The matrix to keep.
+        :type matrix: PlotMatrixAggregate
+        :return: None
+        :rtype: None
+        '''
+
+        # A second save does not replace the first record.
+        if matrix.id in self.records:
+            ServiceError.raise_for(
+                self,
+                MATRIX_ALREADY_KEPT_ID,
+                message=f'Matrix {matrix.id!r} is already kept.',
+                matrix_id=matrix.id,
+            )
+        self.records[matrix.id] = matrix
+        self.saves.append(matrix.id)
+
+    # * method: update
+    def update(self, matrix: PlotMatrixAggregate) -> None:
+        '''
+        Replace a kept matrix with the same id.
+
+        :param matrix: The replacement matrix.
+        :type matrix: PlotMatrixAggregate
+        :return: None
+        :rtype: None
+        '''
+
+        # Update does not insert.
+        if matrix.id not in self.records:
+            ServiceError.raise_for(
+                self,
+                MATRIX_NOT_KEPT_ID,
+                message=f'Matrix {matrix.id!r} is not kept.',
+                matrix_id=matrix.id,
+            )
+        self.records[matrix.id] = matrix
+        self.updates.append(matrix.id)
+
+    # * method: delete
+    def delete(self, id: str) -> None:
+        '''
+        Remove a kept matrix. A missing id changes nothing.
+
+        :param id: The matrix id.
+        :type id: str
+        :return: None
+        :rtype: None
+        '''
+
+        # Pop is idempotent.
+        self.records.pop(id, None)
 # *** functions
 
 # ** function: line_marks
@@ -235,6 +361,40 @@ def imported_modules(module) -> list:
     # Return the imported module names.
     return names
 
+# ** function: cell
+def cell(plot_id='revenue_plot', row=0, col=0, name='Revenue'):
+    '''
+    Build one occupied cell. The plot id is supplied.
+
+    :param plot_id: The plot id.
+    :type plot_id: str
+    :param row: The zero-based row.
+    :type row: int
+    :param col: The zero-based column.
+    :type col: int
+    :param name: The plot name.
+    :type name: str
+    :return: A cell mapping.
+    :rtype: dict
+    '''
+
+    # Matrix declaration must not fill a missing plot id.
+    return {
+        'row': row,
+        'col': col,
+        'plot': {
+            'id': plot_id,
+            'name': name,
+            'kind': 'line',
+            'series': [
+                {
+                    'id': 'rev-1',
+                    'name': 'Revenue',
+                    'marks': line_marks(),
+                },
+            ],
+        },
+    }
 # *** tests
 
 # ** test: events_extend_one_base_and_do_not_draw
@@ -532,3 +692,248 @@ def test_remove_deletes_by_id_and_is_idempotent():
 
     # A second remove of that id still succeeds.
     assert run(RemovePlot, service, id='sales_by_region') == 'sales_by_region'
+
+# ** test: create_declares_and_keeps
+def test_create_declares_and_keeps():
+    '''
+    Create with no id derives the matrix id and keeps the cell plot id.
+    '''
+
+    # Declare through the event. The service is not a file.
+    service = MemoryMatrixService()
+    matrix = DomainEvent.handle(
+        CreateMatrix,
+        dependencies={'matrix_service': service},
+        name='Sales by Region',
+        rows=2,
+        cols=2,
+        cells=[cell()],
+    )
+
+    # The record is kept. Create did not return a picture.
+    assert isinstance(matrix, PlotMatrixAggregate)
+    assert not isinstance(matrix, bytes)
+    assert matrix.id == 'sales_by_region'
+    assert matrix.cells[0].plot.id == 'revenue_plot'
+    assert service.exists('sales_by_region') is True
+    assert service.saves == ['sales_by_region']
+
+# ** test: create_keeps_a_supplied_id_and_rejects_a_second
+def test_create_keeps_a_supplied_id_and_rejects_a_second():
+    '''
+    A supplied matrix id is kept. A second create of that id fails.
+    '''
+
+    # The first create inserts. The id is not rewritten from the name.
+    service = MemoryMatrixService()
+    first = DomainEvent.handle(
+        CreateMatrix,
+        dependencies={'matrix_service': service},
+        id='Custom-Id',
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+    )
+    assert first.id == 'Custom-Id'
+
+    # The second create fails before save. The first record stays.
+    with pytest.raises(TiferetError) as caught:
+        DomainEvent.handle(
+            CreateMatrix,
+            dependencies={'matrix_service': service},
+            id='Custom-Id',
+            name='A different title',
+            rows=1,
+            cols=1,
+            cells=[cell(name='Cost')],
+        )
+    assert caught.value.error_code == MATRIX_ALREADY_KEPT_ID
+    assert service.saves == ['Custom-Id']
+    assert service.get('Custom-Id').name == 'Sales by Region'
+    assert service.get('Custom-Id').cells[0].plot.name == 'Revenue'
+
+# ** test: create_does_not_save_an_illegal_declaration
+def test_create_does_not_save_an_illegal_declaration():
+    '''
+    A cell plot with no id fails, and save is not called.
+    '''
+
+    # The nested plot has a name and no id. Declaration must not fill one.
+    service = MemoryMatrixService()
+    illegal = cell()
+    illegal['plot'].pop('id')
+    with pytest.raises(ValidationError):
+        DomainEvent.handle(
+            CreateMatrix,
+            dependencies={'matrix_service': service},
+            name='Sales by Region',
+            rows=1,
+            cols=1,
+            cells=[illegal],
+        )
+
+    # Nothing was kept.
+    assert service.saves == []
+    assert service.list() == []
+
+# ** test: get_fails_when_missing_and_does_not_derive
+def test_get_fails_when_missing_and_does_not_derive():
+    '''
+    Get of a missing id fails. A name is not turned into an id.
+    '''
+
+    # The kept id is the derived form. The name is not that id.
+    service = MemoryMatrixService()
+    DomainEvent.handle(
+        CreateMatrix,
+        dependencies={'matrix_service': service},
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+    )
+    loaded = DomainEvent.handle(
+        GetMatrix,
+        dependencies={'matrix_service': service},
+        id='sales_by_region',
+    )
+    assert loaded.cells[0].plot.id == 'revenue_plot'
+
+    # Looking up the name does not derive sales_by_region.
+    with pytest.raises(TiferetError) as caught:
+        DomainEvent.handle(
+            GetMatrix,
+            dependencies={'matrix_service': service},
+            id='Sales by Region',
+        )
+    assert caught.value.error_code == MATRIX_NOT_KEPT_ID
+
+# ** test: list_of_an_empty_store_is_an_empty_list
+def test_list_of_an_empty_store_is_an_empty_list():
+    '''
+    List of an empty store returns an empty list, not a string.
+    '''
+
+    # No records have been kept.
+    service = MemoryMatrixService()
+    listed = DomainEvent.handle(
+        ListMatrices,
+        dependencies={'matrix_service': service},
+    )
+
+    # The result is the service list. It is not a sentence.
+    assert listed == []
+    assert not isinstance(listed, str)
+    assert not isinstance(listed, bytes)
+
+# ** test: update_changes_the_name_and_not_the_id
+def test_update_changes_the_name_and_not_the_id():
+    '''
+    Update of a kept id changes the name and does not re-derive any id.
+    '''
+
+    # Keep a matrix, then replace the name. The plot id stays supplied.
+    service = MemoryMatrixService()
+    DomainEvent.handle(
+        CreateMatrix,
+        dependencies={'matrix_service': service},
+        id='Custom-Id',
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+    )
+    updated = DomainEvent.handle(
+        UpdateMatrix,
+        dependencies={'matrix_service': service},
+        id='Custom-Id',
+        name='Quarterly Sales',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+    )
+
+    # The key did not follow the new name. The plot id was not derived.
+    assert updated.id == 'Custom-Id'
+    assert updated.name == 'Quarterly Sales'
+    assert updated.cells[0].plot.id == 'revenue_plot'
+    assert service.get('quarterly_sales') is None
+    assert service.updates == ['Custom-Id']
+
+# ** test: update_of_a_missing_id_does_not_insert
+def test_update_of_a_missing_id_does_not_insert():
+    '''
+    Update of a missing id fails and does not insert.
+    '''
+
+    # Nothing is kept. Update must not become create.
+    service = MemoryMatrixService()
+    with pytest.raises(TiferetError) as caught:
+        DomainEvent.handle(
+            UpdateMatrix,
+            dependencies={'matrix_service': service},
+            id='Custom-Id',
+            name='Sales by Region',
+            rows=1,
+            cols=1,
+            cells=[cell()],
+        )
+    assert caught.value.error_code == MATRIX_NOT_KEPT_ID
+    assert service.updates == []
+    assert service.get('Custom-Id') is None
+
+# ** test: remove_is_idempotent_and_does_not_return_the_matrix
+def test_remove_is_idempotent_and_does_not_return_the_matrix():
+    '''
+    Remove of a kept id makes exists false. Remove of a missing id succeeds.
+    '''
+
+    # Remove the kept record. The return is the id, not the matrix.
+    service = MemoryMatrixService()
+    DomainEvent.handle(
+        CreateMatrix,
+        dependencies={'matrix_service': service},
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+    )
+    removed = DomainEvent.handle(
+        RemoveMatrix,
+        dependencies={'matrix_service': service},
+        id='sales_by_region',
+    )
+    assert removed == 'sales_by_region'
+    assert not isinstance(removed, PlotMatrixAggregate)
+    assert service.exists('sales_by_region') is False
+
+    # A second remove changes nothing and still does not return a matrix.
+    again = DomainEvent.handle(
+        RemoveMatrix,
+        dependencies={'matrix_service': service},
+        id='sales_by_region',
+    )
+    assert again == 'sales_by_region'
+    assert service.list() == []
+
+# ** test: matrix_events_do_not_import_a_drawing_tool_or_a_repository
+def test_matrix_events_do_not_import_a_drawing_tool_or_a_repository():
+    '''
+    Matrix events do not import Matplotlib, a repository, or the plot event base.
+    '''
+
+    # The base holds MatrixService. It does not extend a plot event.
+    assert issubclass(CreateMatrix, MatrixEvent)
+    assert issubclass(GetMatrix, MatrixEvent)
+    assert issubclass(ListMatrices, MatrixEvent)
+    assert issubclass(UpdateMatrix, MatrixEvent)
+    assert issubclass(RemoveMatrix, MatrixEvent)
+    imported = ' '.join(imported_modules(events_module))
+    assert 'matplotlib' not in imported
+    assert 'repos' not in imported
+    assert 'utils' not in imported
+    source = inspect.getsource(MatrixEvent)
+    assert 'PlotEvent' not in source
+    assert 'PlotService' not in source
+    assert 'png' not in Path(events_module.__file__).read_text().lower()

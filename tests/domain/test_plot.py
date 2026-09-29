@@ -13,7 +13,9 @@ from pydantic import ValidationError
 # ** app
 from tiferet_plot.domain.plot import (
     Mark,
+    MatrixCell,
     Plot,
+    PlotMatrix,
     Series,
 )
 import tiferet_plot.domain.plot as plot_module
@@ -39,6 +41,30 @@ def line_marks(x=(1, 2), y=(3, 4)):
         Mark(role='x', values=x),
         Mark(role='y', values=y),
     ]
+
+# ** function: line_plot
+def line_plot(plot_id='revenue_plot', name='Revenue'):
+    '''
+    Build a valid line plot with a supplied id.
+
+    :param plot_id: The plot id. Not derived by the matrix.
+    :type plot_id: str
+    :param name: The plot name.
+    :type name: str
+    :return: A declared line plot.
+    :rtype: Plot
+    '''
+
+    # The plot id is already set. Matrix declaration must not rewrite it.
+    return Plot(
+        id=plot_id,
+        name=name,
+        kind='line',
+        description='Revenue compared across regions.',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
 
 # ** function: bar_marks
 def bar_marks(category=('North', 'South'), height=(10, 12)):
@@ -455,3 +481,208 @@ def test_domain_types_do_not_import_matplotlib_or_a_repository():
         assert 'matplotlib' not in imported
         assert 'repos' not in imported
         assert 'repository' not in imported
+
+# ** test: matrix_declaration_derives_id_and_keeps_the_cell_plot
+def test_matrix_declaration_derives_id_and_keeps_the_cell_plot():
+    '''
+    A named matrix with one occupied cell derives its id and keeps the plot id.
+    '''
+
+    # Declare the acceptance record. No matrix id. One cell, three empty corners.
+    plot = line_plot()
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=2,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=1, plot=plot),
+        ],
+    )
+
+    # The matrix id is the snake_case name. The cell plot id is unchanged.
+    assert matrix.id == 'sales_by_region'
+    assert matrix.cells[0].plot.id == 'revenue_plot'
+    assert matrix.cells[0].plot is plot
+    assert matrix.rows == 2
+    assert matrix.cols == 2
+
+    # The matrix is not a plot kind and has no drawing or store fields.
+    assert set(PlotMatrix.model_fields) == {
+        'id',
+        'name',
+        'description',
+        'rows',
+        'cols',
+        'cells',
+    }
+    assert 'kind' not in PlotMatrix.model_fields
+    assert 'marks' not in PlotMatrix.model_fields
+    assert 'renderer' not in PlotMatrix.model_fields
+    assert 'file_path' not in PlotMatrix.model_fields
+
+# ** test: matrix_id_follows_the_plot_rule
+def test_matrix_id_follows_the_plot_rule():
+    '''
+    A separator run becomes one underscore. A supplied id is kept.
+    '''
+
+    # Sales/Region has no id, so declaration derives one.
+    derived = PlotMatrix(
+        name='Sales/Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+
+    # A supplied id is not rewritten from the name.
+    supplied = PlotMatrix(
+        id='Custom-Id',
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+
+    # Blank is omitted, not stored. Description is not identity.
+    blank = PlotMatrix(
+        id='   ',
+        name='Sales by Region',
+        description='A grid of claims.',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+
+    # The plot rule, applied once to the matrix.
+    assert derived.id == 'sales_region'
+    assert supplied.id == 'Custom-Id'
+    assert blank.id == 'sales_by_region'
+    assert blank.description == 'A grid of claims.'
+
+# ** test: cell_plot_missing_id_is_not_derived
+@pytest.mark.parametrize('plot_id', [None, '', '   '])
+def test_cell_plot_missing_id_is_not_derived(plot_id):
+    '''
+    A cell plot with a missing or blank id fails, and the name does not fill it.
+    '''
+
+    # The plot is a nested mapping, so matrix declaration is the one that sees it.
+    plot = {
+        'name': 'Revenue',
+        'kind': 'line',
+        'series': [
+            {'name': 'Revenue', 'marks': line_marks()},
+        ],
+    }
+    if plot_id is not None:
+        plot['id'] = plot_id
+
+    # Declaration fails. It does not become a plot id of revenue.
+    with pytest.raises(ValidationError):
+        PlotMatrix(
+            name='Sales by Region',
+            rows=1,
+            cols=1,
+            cells=[
+                {'row': 0, 'col': 0, 'plot': plot},
+            ],
+        )
+
+# ** test: illegal_grid_fails
+@pytest.mark.parametrize('kwargs', [
+    {'rows': 0, 'cols': 1, 'cells': [{'row': 0, 'col': 0}]},
+    {'rows': 1, 'cols': 0, 'cells': [{'row': 0, 'col': 0}]},
+    {'rows': 2, 'cols': 2, 'cells': []},
+    {'rows': 2, 'cols': 2, 'cells': [{'row': 2, 'col': 0}]},
+    {
+        'rows': 2,
+        'cols': 2,
+        'cells': [
+            {'row': 0, 'col': 1},
+            {'row': 0, 'col': 1},
+        ],
+    },
+])
+def test_illegal_grid_fails(kwargs):
+    '''
+    A grid below 1, with no cells, an outside cell, or a shared position fails.
+    '''
+
+    # Each cell carries a valid plot. The grid rules are what fail.
+    cells = []
+    for cell in kwargs['cells']:
+        cells.append({
+            **cell,
+            'plot': line_plot(),
+        })
+
+    # Rows and columns are not inferred from the occupied cells.
+    with pytest.raises(ValidationError):
+        PlotMatrix(
+            name='Sales by Region',
+            rows=kwargs['rows'],
+            cols=kwargs['cols'],
+            cells=cells,
+        )
+
+# ** test: same_plot_id_may_occupy_two_cells
+def test_same_plot_id_may_occupy_two_cells():
+    '''
+    Two cells may share a plot id. Each keeps the record it carries.
+    '''
+
+    # Same id, different payloads. They are two placements.
+    first = line_plot(name='Revenue')
+    second = Plot(
+        id='revenue_plot',
+        name='Cost',
+        kind='bar',
+        series=[
+            Series(name='Cost', marks=bar_marks()),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Shared',
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=0, plot=first),
+            MatrixCell(row=0, col=1, plot=second),
+        ],
+    )
+
+    # Neither payload is rewritten, and neither is required to match the other.
+    assert matrix.cells[0].plot.id == matrix.cells[1].plot.id == 'revenue_plot'
+    assert matrix.cells[0].plot.name == 'Revenue'
+    assert matrix.cells[1].plot.name == 'Cost'
+    assert matrix.cells[1].plot.kind == 'bar'
+
+# ** test: plot_does_not_become_a_matrix
+def test_plot_does_not_become_a_matrix():
+    '''
+    A plot does not gain a matrix field, and matrix is not a legal kind.
+    '''
+
+    # The plot record is unchanged by this round.
+    assert 'matrix' not in Plot.model_fields
+    assert 'matrix' not in plot_module.PLOT_KINDS
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Sales by Region',
+            kind='matrix',
+            series=[
+                Series(name='Revenue', marks=line_marks()),
+            ],
+        )
+
+    # A cell description, and a cell that stores only an id, are not this record.
+    with pytest.raises(ValidationError):
+        MatrixCell(row=0, col=0, plot=line_plot(), description='Not a cell field.')
+    with pytest.raises(ValidationError):
+        MatrixCell(row=0, col=0, plot='revenue_plot')

@@ -5,7 +5,9 @@
 # ** app
 from .plot import (
     Mark,
+    MatrixCell,
     Plot,
+    PlotMatrix,
     Series,
 )
 
@@ -13,6 +15,8 @@ from .plot import (
 
 __all__ = [
     'Mark',
+    'MatrixCell',
     'Plot',
+    'PlotMatrix',
     'Series',
 ]

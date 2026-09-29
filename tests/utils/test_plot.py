@@ -14,7 +14,9 @@ import pytest
 import tiferet_plot
 from tiferet_plot.domain.plot import (
     Mark,
+    MatrixCell,
     Plot,
+    PlotMatrix,
     Series,
 )
 from tiferet_plot.interfaces.plot import RendererService
@@ -192,6 +194,47 @@ def imported_modules(path: Path) -> list:
 
     # Return the imported module names.
     return names
+
+# ** function: png_size
+def png_size(png: bytes) -> tuple:
+    '''
+    Return the pixel width and height of a PNG.
+
+    :param png: The rendered bytes.
+    :type png: bytes
+    :return: Width and height.
+    :rtype: tuple
+    '''
+
+    # IHDR is the first chunk. Its data starts with width and height.
+    assert png.startswith(PNG_SIGNATURE)
+    assert png[12:16] == b'IHDR'
+    width = int.from_bytes(png[16:20], 'big')
+    height = int.from_bytes(png[20:24], 'big')
+    return width, height
+
+# ** function: occupied_matrix
+def occupied_matrix(plots):
+    '''
+    Place plots in row-major order on a 2 by 2 grid.
+
+    :param plots: The occupied plots, at most four.
+    :type plots: list
+    :return: A declared matrix that has not been kept.
+    :rtype: PlotMatrix
+    '''
+
+    # Empty corners are the cells that were not passed.
+    cells = [
+        MatrixCell(row=index // 2, col=index % 2, plot=plot)
+        for index, plot in enumerate(plots)
+    ]
+    return PlotMatrix(
+        name='Sales by Region',
+        rows=2,
+        cols=2,
+        cells=cells,
+    )
 
 # ** function: render_parameters
 def render_parameters() -> list:
@@ -408,6 +451,133 @@ def test_drawing_tool_is_not_a_package_export():
     imported = ' '.join(imported_modules(Path(tiferet_plot.__file__)))
     assert 'matplotlib' not in imported
     assert 'utils' not in imported
+
+# ** test: render_matrix_calls_render_once_per_occupied_cell
+def test_render_matrix_calls_render_once_per_occupied_cell(tmp_path, monkeypatch):
+    '''
+    A grid is one PNG. render is called once per occupied cell, not for an empty position.
+    '''
+
+    # One occupied cell in a 2 by 2 grid. The record has not been kept.
+    monkeypatch.chdir(tmp_path)
+    plot = line_plot()
+    matrix = occupied_matrix([plot])
+    renderer = MatplotlibRenderer()
+    calls = []
+    real_render = renderer.render
+
+    def wrapped(record):
+        '''
+        Count render calls and delegate to the real method.
+
+        :param record: The cell plot.
+        :type record: Plot
+        :return: The cell picture.
+        :rtype: bytes
+        '''
+
+        # Record the object, not a looked-up copy.
+        calls.append(record)
+        return real_render(record)
+
+    renderer.render = wrapped
+    grid = renderer.render_matrix(matrix)
+    alone = real_render(plot)
+
+    # One call, on that cell's plot. The grid is one PNG and is not that cell alone.
+    assert calls == [plot]
+    assert grid.startswith(PNG_SIGNATURE)
+    assert grid.count(b'IEND') == 1
+    assert image_data(grid)
+    assert image_data(grid) != image_data(alone)
+    assert png_size(grid) != png_size(alone)
+    assert list(tmp_path.iterdir()) == []
+    assert render_parameters() == ['self', 'plot']
+
+# ** test: same_plot_id_is_rendered_twice
+def test_same_plot_id_is_rendered_twice():
+    '''
+    Two cells with the same plot id cause two render calls.
+    '''
+
+    # Same id, different payloads. Each cell is drawn from the record it carries.
+    first = line_plot(y=(3, 4))
+    second = Plot(
+        id=first.id,
+        name='Cost',
+        kind='line',
+        series=[
+            Series(name='Cost', marks=line_marks(y=(30, 40))),
+        ],
+    )
+    matrix = occupied_matrix([first, second])
+    renderer = MatplotlibRenderer()
+    calls = []
+    real_render = renderer.render
+
+    def wrapped(record):
+        '''
+        Count render calls and delegate to the real method.
+
+        :param record: The cell plot.
+        :type record: Plot
+        :return: The cell picture.
+        :rtype: bytes
+        '''
+
+        # Do not collapse the two placements into one call.
+        calls.append(record)
+        return real_render(record)
+
+    renderer.render = wrapped
+    grid = renderer.render_matrix(matrix)
+
+    # Two calls, two objects, one picture.
+    assert calls == [first, second]
+    assert calls[0] is not calls[1]
+    assert calls[0].id == calls[1].id
+    assert image_data(grid)
+    assert grid.count(b'IEND') == 1
+
+# ** test: render_matrix_fails_when_a_cell_fails
+def test_render_matrix_fails_when_a_cell_fails(tmp_path, monkeypatch):
+    '''
+    If a cell plot would fail render, render_matrix fails and returns no picture.
+    '''
+
+    # The second cell is not a legal plot. Declaration is bypassed on purpose.
+    monkeypatch.chdir(tmp_path)
+    bad = illegal_record('histogram', line_marks())
+    matrix = PlotMatrix.model_construct(
+        id='sales_by_region',
+        name='Sales by Region',
+        description=None,
+        rows=2,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+            MatrixCell.model_construct(row=0, col=1, plot=bad),
+        ],
+    )
+
+    # The failure is the picture not being returned. No file is written.
+    with pytest.raises(ValueError):
+        MatplotlibRenderer().render_matrix(matrix)
+    assert list(tmp_path.iterdir()) == []
+
+# ** test: render_matrix_does_not_open_a_store
+def test_render_matrix_does_not_open_a_store():
+    '''
+    render_matrix does not call a plot or matrix service.
+    '''
+
+    # The method takes a matrix. It has no store and no path argument.
+    signature = inspect.signature(MatplotlibRenderer.render_matrix)
+    assert list(signature.parameters) == ['self', 'matrix']
+    source = inspect.getsource(MatplotlibRenderer.render_matrix)
+    assert 'PlotService' not in source
+    assert 'MatrixService' not in source
+    assert 'heatmap' not in source.lower()
 
 # ** test: no_event_imports_the_utility_or_returns_png
 def test_no_event_imports_the_utility_or_returns_png():

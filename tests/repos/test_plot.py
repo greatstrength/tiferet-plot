@@ -14,13 +14,22 @@ from tiferet import use_tester
 from tiferet.interfaces import ServiceError
 from tiferet.repos.core import UNSUPPORTED_CONFIG_FILE_TYPE_ID
 from tiferet_plot import (
+    MATRIX_ALREADY_KEPT_ID,
+    MATRIX_NOT_KEPT_ID,
     PLOT_ALREADY_KEPT_ID,
     PLOT_NOT_KEPT_ID,
     PlotService,
 )
 from tiferet_plot.domain.plot import Mark
-from tiferet_plot.mappers.plot import PlotAggregate, SeriesAggregate
-from tiferet_plot.repos.plot import PlotConfigRepository
+from tiferet_plot.mappers.plot import (
+    PlotAggregate,
+    PlotMatrixAggregate,
+    SeriesAggregate,
+)
+from tiferet_plot.repos.plot import (
+    MatrixConfigRepository,
+    PlotConfigRepository,
+)
 import tiferet_plot
 import tiferet_plot.repos as repos_package
 
@@ -594,3 +603,195 @@ class TestPlotConfigRepository:
         # Delete the seeded id, then a missing id.
         repo = test_ctx.make_target(config_file=seeded_plot_file)
         test_ctx.assert_delete(repo)
+
+# ** function: matrix_record
+def matrix_record() -> PlotMatrixAggregate:
+    '''
+    A 2 by 2 matrix with one occupied cell and a supplied matrix id.
+
+    :return: The matrix aggregate.
+    :rtype: PlotMatrixAggregate
+    '''
+
+    # The cell plot id matches a plots key in the sibling-root test.
+    return PlotMatrixAggregate(
+        id='Custom-Id',
+        name='Sales by Region',
+        description='A grid of claims.',
+        rows=2,
+        cols=2,
+        cells=[
+            {
+                'row': 0,
+                'col': 1,
+                'plot': {
+                    'id': 'revenue_plot',
+                    'name': 'Cell Revenue',
+                    'kind': 'line',
+                    'description': 'Revenue compared across regions.',
+                    'series': [
+                        {
+                            'id': 'rev-1',
+                            'name': 'Revenue',
+                            'marks': line_marks(),
+                        },
+                    ],
+                },
+            },
+        ],
+    )
+
+# ** test: matrix_save_keeps_plots_and_round_trips_the_cell
+def test_matrix_save_keeps_plots_and_round_trips_the_cell(tmp_path):
+    '''
+    Saving a matrix writes matrices and does not write cell plots under plots.
+    '''
+
+    # A publication that already keeps a plot, including the cell's plot id.
+    path = tmp_path / 'publication.yml'
+    path.write_text(
+        'note: keep\n'
+        'plots:\n'
+        '  revenue_plot:\n'
+        '    name: Stored Revenue\n'
+        '    kind: line\n'
+        '    series:\n'
+        '      - id: revenue\n'
+        '        name: Revenue\n'
+        '        marks:\n'
+        '          - role: x\n'
+        '            values: [9, 8]\n'
+        '          - role: y\n'
+        '            values: [7, 6]\n',
+        encoding='utf-8',
+    )
+    repo = MatrixConfigRepository(str(path))
+    before = repo._load()
+    matrix = matrix_record()
+    repo.save(matrix)
+
+    # The plots root is unchanged. The cell plot was not inserted beside it.
+    raw = repo._load()
+    assert raw['note'] == 'keep'
+    assert raw['plots'] == before['plots']
+    assert set(raw['plots']) == {'revenue_plot'}
+    assert raw['plots']['revenue_plot']['name'] == 'Stored Revenue'
+    assert 'cost_plot' not in raw['plots']
+
+    # The matrix body has no matrix id. The cell plot id is in the cell.
+    body = raw['matrices']['Custom-Id']
+    assert 'id' not in body
+    assert body['name'] == 'Sales by Region'
+    assert body['cells'][0]['plot']['id'] == 'revenue_plot'
+    assert body['cells'][0]['plot']['name'] == 'Cell Revenue'
+    assert 'renderer' not in body
+    assert 'file_path' not in body
+
+    # Loading returns the cell record, not the plots-root record.
+    loaded = repo.get('Custom-Id')
+    assert loaded.id == 'Custom-Id'
+    assert loaded.name == matrix.name
+    assert loaded.description == matrix.description
+    assert loaded.rows == 2
+    assert loaded.cols == 2
+    cell_plot = loaded.cells[0].plot
+    assert cell_plot.id == 'revenue_plot'
+    assert cell_plot.name == 'Cell Revenue'
+    assert cell_plot.kind == 'line'
+    assert cell_plot.description == 'Revenue compared across regions.'
+    assert cell_plot.series[0].id == 'rev-1'
+    assert cell_plot.series[0].name == 'Revenue'
+    assert cell_plot.series[0].marks[0].values == (1, 2)
+    assert cell_plot.series[0].marks[1].values == (3, 4)
+    listed = repo.list()
+    assert [item.id for item in listed] == ['Custom-Id']
+    assert not isinstance(listed, str)
+
+# ** test: second_matrix_save_fails_and_leaves_the_first
+def test_second_matrix_save_fails_and_leaves_the_first(tmp_path):
+    '''
+    A second save of a matrix id fails, and the first matrix is unchanged.
+    '''
+
+    # Keep the matrix, then try to replace it with save.
+    path = tmp_path / 'publication.yml'
+    repo = MatrixConfigRepository(str(path))
+    first = matrix_record()
+    repo.save(first)
+    before = path.read_bytes()
+    duplicate = PlotMatrixAggregate(
+        id=first.id,
+        name='A different title',
+        rows=2,
+        cols=2,
+        cells=first.cells,
+    )
+    with pytest.raises(ServiceError) as caught:
+        repo.save(duplicate)
+
+    # The first publication is byte-for-byte unchanged.
+    assert caught.value.error_code == MATRIX_ALREADY_KEPT_ID
+    assert path.read_bytes() == before
+    assert repo.get(first.id).name == 'Sales by Region'
+
+# ** test: matrix_update_and_delete_follow_the_plot_rules
+def test_matrix_update_and_delete_follow_the_plot_rules(tmp_path):
+    '''
+    Update replaces a kept id. A missing id is not inserted. Delete of a missing id succeeds.
+    '''
+
+    # A missing file has nothing to replace, and delete does not create it.
+    path = tmp_path / 'publication.json'
+    repo = MatrixConfigRepository(str(path))
+    matrix = matrix_record()
+    assert repo.get(matrix.id) is None
+    assert repo.list() == []
+    repo.delete(matrix.id)
+    assert not path.exists()
+    with pytest.raises(ServiceError) as caught:
+        repo.update(matrix)
+    assert caught.value.error_code == MATRIX_NOT_KEPT_ID
+    assert not path.exists()
+
+    # Update of a kept id changes the name and does not change the id.
+    repo.save(matrix)
+    matrix.rename('Quarterly Sales')
+    repo.update(matrix)
+    loaded = repo.get('Custom-Id')
+    assert loaded.id == 'Custom-Id'
+    assert loaded.name == 'Quarterly Sales'
+    assert loaded.cells[0].plot.id == 'revenue_plot'
+    assert repo.get('quarterly_sales') is None
+    body = repo._load()['matrices']['Custom-Id']
+    assert 'id' not in body
+    assert body['name'] == 'Quarterly Sales'
+
+    # A missing update still does not insert, and it does not erase matrices.
+    before = path.read_bytes()
+    missing = PlotMatrixAggregate(
+        id='other',
+        name='Other',
+        rows=2,
+        cols=2,
+        cells=matrix.cells,
+    )
+    with pytest.raises(ServiceError) as caught:
+        repo.update(missing)
+    assert caught.value.error_code == MATRIX_NOT_KEPT_ID
+    assert path.read_bytes() == before
+    assert repo.get('other') is None
+
+    # Delete of a missing id succeeds and does not change the file.
+    repo.delete('missing')
+    assert path.read_bytes() == before
+
+# ** test: matrix_repository_is_not_exported
+def test_matrix_repository_is_not_exported():
+    '''
+    The matrix repository is not a package export.
+    '''
+
+    # Callers depend on the service. The file class stays unexported.
+    assert 'MatrixConfigRepository' not in tiferet_plot.__all__
+    assert not hasattr(tiferet_plot, 'MatrixConfigRepository')
+    assert not hasattr(repos_package, 'MatrixConfigRepository')

@@ -10,12 +10,13 @@ import os
 os.environ.setdefault('MPLBACKEND', 'Agg')
 
 # ** infra
+from matplotlib import image as mpl_image
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 # ** app
 from ..interfaces.plot import RendererService
-from ..mappers.plot import PlotAggregate
+from ..mappers.plot import PlotAggregate, PlotMatrixAggregate
 
 # *** constants
 
@@ -207,6 +208,59 @@ def _draw(axes, kind: str, series_values: list) -> None:
     allowed = ', '.join(RENDER_KINDS)
     raise ValueError(f'Kind {kind!r} is not one of {allowed}.')
 
+# ** function: _read_png
+def _read_png(png: bytes):
+    '''
+    Read picture bytes into an image array.
+
+    The bytes came from ``render``. They are not written to a path.
+
+    :param png: The picture bytes.
+    :type png: bytes
+    :return: The image array.
+    :rtype: Any
+    '''
+
+    # Read the picture from memory. Do not place it on disk.
+    return mpl_image.imread(io.BytesIO(png), format='png')
+
+# ** function: _compose_grid
+def _compose_grid(rows: int, cols: int, pictures: list) -> bytes:
+    '''
+    Place occupied-cell pictures on the declared grid.
+
+    Empty positions stay empty. The result is one picture, not one
+    picture per cell.
+
+    :param rows: The declared row count.
+    :type rows: int
+    :param cols: The declared column count.
+    :type cols: int
+    :param pictures: ``(row, col, png)`` for each occupied cell.
+    :type pictures: list
+    :return: The grid as PNG bytes.
+    :rtype: bytes
+    '''
+
+    # Size the figure by the declared grid, so an empty corner takes space.
+    figure = Figure(figsize=(4 * cols, 3 * rows))
+    FigureCanvasAgg(figure)
+    axes_grid = figure.subplots(nrows=rows, ncols=cols, squeeze=False)
+    for row in range(rows):
+        for col in range(cols):
+            axes_grid[row][col].set_axis_off()
+
+    # Place each occupied picture. Do not draw an empty position.
+    for row, col, png in pictures:
+        axes = axes_grid[row][col]
+        axes.imshow(_read_png(png))
+        axes.set_axis_off()
+
+    # The bytes are the grid. Where they are placed is not this service.
+    buffer = io.BytesIO()
+    figure.savefig(buffer, format='png')
+    return buffer.getvalue()
+
 # *** utils
 
 # ** util: matplotlib_renderer
@@ -244,3 +298,26 @@ class MatplotlibRenderer(RendererService):
         buffer = io.BytesIO()
         figure.savefig(buffer, format='png')
         return buffer.getvalue()
+
+    # * method: render_matrix
+    def render_matrix(self, matrix: PlotMatrixAggregate) -> bytes:
+        '''
+        Render a declared grid to one PNG.
+
+        Each occupied cell is drawn by ``render`` and placed at its row
+        and column. An empty position is not drawn. An unsaved matrix is
+        a valid input. If any occupied cell fails, no picture is returned.
+
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :return: The grid as PNG bytes.
+        :rtype: bytes
+        '''
+
+        # Draw every occupied cell first. A failure returns no grid.
+        pictures = []
+        for cell in matrix.cells:
+            pictures.append((cell.row, cell.col, self.render(cell.plot)))
+
+        # Place those pictures on the declared grid, including empty positions.
+        return _compose_grid(matrix.rows, matrix.cols, pictures)
