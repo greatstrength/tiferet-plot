@@ -8,6 +8,7 @@ from .domain.plot import (
     Plot,
     Series,
 )
+from .interfaces.plot import RendererService
 from .mappers.plot import (
     PlotAggregate,
     SeriesAggregate,
@@ -19,6 +20,7 @@ __all__ = [
     'Mark',
     'Plot',
     'PlotAggregate',
+    'RendererService',
     'Series',
     'SeriesAggregate',
 ]
