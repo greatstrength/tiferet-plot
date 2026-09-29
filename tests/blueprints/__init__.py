@@ -1,0 +1,1 @@
+"""Plotter session blueprint tests."""

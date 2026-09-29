@@ -30,6 +30,8 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = [
     "tiferet_plot",
+    "tiferet_plot.blueprints",
+    "tiferet_plot.contexts",
     "tiferet_plot.domain",
     "tiferet_plot.events",
     "tiferet_plot.interfaces",

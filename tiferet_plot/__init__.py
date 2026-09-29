@@ -39,6 +39,8 @@ from .events.plot import (
     UpdateMatrix,
     UpdatePlot,
 )
+from .contexts.plot import PlotterSessionContext
+from .blueprints.plot import create_plotter_session
 
 # *** exports
 
@@ -64,6 +66,7 @@ __all__ = [
     'PlotMatrix',
     'PlotMatrixAggregate',
     'PlotService',
+    'PlotterSessionContext',
     'RemoveMatrix',
     'RemovePlot',
     'RendererService',
@@ -71,4 +74,5 @@ __all__ = [
     'SeriesAggregate',
     'UpdateMatrix',
     'UpdatePlot',
+    'create_plotter_session',
 ]
