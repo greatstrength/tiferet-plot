@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any, ClassVar, Dict, Sequence
 
 # ** infra
-from pydantic import ConfigDict, Field
+from pydantic import Field
 
 # ** app
 from tiferet.mappers import Aggregate, TransferObject
@@ -151,25 +151,15 @@ class SeriesConfigObject(Series, TransferObject):
     '''
     The file shape of one series inside its plot.
 
-    The series id is a key under that plot, not a field in the body and
-    not a second store. Renaming the series does not change that key.
+    A series is nested in the plot body, not a second store. Its id stays
+    on the series so a rename does not recompute it.
     '''
-
-    # * attribute: model_config
-    model_config = ConfigDict(
-        extra='ignore',
-        populate_by_name=True,
-        validate_assignment=False,
-        arbitrary_types_allowed=True,
-        coerce_numbers_to_str=True,
-    )
 
     # * attribute: _ROLES
     _ROLES: ClassVar[Dict[str, Dict[str, Any]]] = {
         'to_model': {},
         'to_data': {
             'by_alias': True,
-            'exclude': {'id'},
             'mode': 'json',
         },
     }
@@ -193,18 +183,10 @@ class PlotConfigObject(Plot, TransferObject):
     '''
     The file shape of a plot record, not a second record and not a picture.
 
-    The plot id is the file key. The body keeps the name, the kind, the
-    description, and the marks. It does not keep a renderer or a store handle.
+    The plot id is the file key, so ``to_data`` excludes it. Series are
+    nested transfer objects in the body. The body does not keep a renderer
+    or a store handle.
     '''
-
-    # * attribute: model_config
-    model_config = ConfigDict(
-        extra='ignore',
-        populate_by_name=True,
-        validate_assignment=False,
-        arbitrary_types_allowed=True,
-        coerce_numbers_to_str=True,
-    )
 
     # * attribute: _ROLES
     _ROLES: ClassVar[Dict[str, Dict[str, Any]]] = {
@@ -222,38 +204,8 @@ class PlotConfigObject(Plot, TransferObject):
     series: list[SeriesConfigObject] = Field(
         ...,
         min_length=1,
-        description='The series in this plot, stored under the plot entry.',
+        description='The series nested in this plot entry.',
     )
-
-    # * method: to_primitive
-    def to_primitive(self, role: str = None, **overrides) -> dict:
-        '''
-        Serialize the plot, and key series by id when writing the file.
-
-        :param role: The serialization role.
-        :type role: str
-        :param overrides: Additional model_dump arguments.
-        :type overrides: dict
-        :return: The serialized mapping.
-        :rtype: dict
-        '''
-
-        # Serialize with the role. to_data already excludes the plot id.
-        data = super().to_primitive(role, **overrides)
-
-        # Only the file role stores series under this plot, keyed by series id.
-        if role != 'to_data':
-            return data
-
-        # The series id is the key. It is not repeated in the series body.
-        data.pop('id', None)
-        data['series'] = {
-            series.id: SeriesConfigObject.from_model(series).to_primitive('to_data')
-            for series in self.series
-        }
-
-        # Return the file body.
-        return data
 
     # * method: map
     def map(self, **overrides) -> PlotAggregate:

@@ -14,7 +14,7 @@ from ..interfaces.plot import (
     PLOT_NOT_KEPT_ID,
     PlotService,
 )
-from ..mappers.plot import (
+from ..mappers import (
     PlotAggregate,
     PlotConfigObject,
 )
@@ -27,10 +27,10 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
     The first store for a plot record: a publication file beside the paper.
 
     ``.yaml`` and ``.yml`` are YAML. ``.json`` is JSON. Any other extension
-    fails. Records live under a ``plots`` root, keyed by plot id. Series
-    live inside that entry, keyed by series id, so deleting a plot takes
-    its series with it. The ids are the keys. They are not fields in the
-    stored body. This store does not draw and does not derive ids.
+    fails. Records live under a ``plots`` root, keyed by plot id. The
+    transfer object writes the body and excludes that id. Series are nested
+    in the plot entry, so deleting a plot takes them with it. This store
+    does not draw and does not derive ids.
     '''
 
     # * init
@@ -92,55 +92,15 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
         :rtype: dict
         '''
 
-        # Return the plots root, defaulting to an empty mapping.
-        return self._load_full().get('plots') or {}
+        # An unsupported extension fails before a missing file is empty.
+        self._require_supported_file()
+        if not Path(self.config_file).exists():
+            return {}
 
-    # * method: _entry
-    def _entry(self, plot: PlotAggregate) -> dict:
-        '''
-        Serialize a plot to the stored body.
-
-        The body excludes the plot id. Series are keyed by series id.
-
-        :param plot: The plot aggregate to store.
-        :type plot: PlotAggregate
-        :return: The file body for this plot.
-        :rtype: dict
-        '''
-
-        # The transfer object writes the file shape. The repository does not derive an id.
-        return PlotConfigObject.from_model(plot).to_primitive(self.default_role)
-
-    # * method: _to_aggregate
-    def _to_aggregate(self, plot_id: str, body: dict) -> PlotAggregate:
-        '''
-        Map a stored plot entry back to the aggregate.
-
-        The plot id and each series id come from keys, not from the body.
-
-        :param plot_id: The plot key.
-        :type plot_id: str
-        :param body: The stored plot body.
-        :type body: dict
-        :return: The plot aggregate.
-        :rtype: PlotAggregate
-        '''
-
-        # Series live inside this plot, keyed by series id.
-        series = [
-            {
-                **series_body,
-                'id': series_id,
-            }
-            for series_id, series_body in (body.get('series') or {}).items()
-        ]
-
-        # The plot id comes from the file key. The key wins over any body field.
-        return PlotConfigObject.model_validate({
-            **body,
-            'id': plot_id,
-            'series': series,
-        }).map()
+        # Select the plots node. An empty root is an empty store.
+        return self._load(
+            start_node=lambda data: (data or {}).get('plots') or {},
+        ) or {}
 
     # * method: exists
     def exists(self, id: str) -> bool:
@@ -172,8 +132,11 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
         if not body:
             return None
 
-        # Put the id back from the key and return the record.
-        return self._to_aggregate(id, body)
+        # Inject the file key as id, then map the transfer object.
+        return PlotConfigObject.model_validate({
+            **body,
+            'id': id,
+        }).map()
 
     # * method: list
     def list(self) -> list[PlotAggregate]:
@@ -186,7 +149,10 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
 
         # Map each kept entry. An empty or missing file returns no records.
         return [
-            self._to_aggregate(plot_id, body)
+            PlotConfigObject.model_validate({
+                **body,
+                'id': plot_id,
+            }).map()
             for plot_id, body in self._load_plots().items()
         ]
 
@@ -202,6 +168,9 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
         :raises ServiceError: ``PLOT_ALREADY_KEPT`` when the id is already kept.
         '''
 
+        # Convert the plot to the file shape. The role excludes the plot id.
+        plot_data = PlotConfigObject.from_model(plot)
+
         # Load the publication. A missing file is an empty store.
         full_data = self._load_full()
         plots = full_data.get('plots') or {}
@@ -215,8 +184,8 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
                 plot_id=plot.id,
             )
 
-        # Insert the body under the plot id. The id is the key, not a body field.
-        plots[plot.id] = self._entry(plot)
+        # Insert the body under the plot id.
+        plots[plot.id] = plot_data.to_primitive(self.default_role)
         full_data['plots'] = plots
         self._save(full_data)
 
@@ -232,6 +201,9 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
         :raises ServiceError: ``PLOT_NOT_KEPT`` when the id is not kept.
         '''
 
+        # Convert the plot to the file shape. The role excludes the plot id.
+        plot_data = PlotConfigObject.from_model(plot)
+
         # Load the publication. A missing file has nothing to replace.
         full_data = self._load_full()
         plots = full_data.get('plots') or {}
@@ -246,7 +218,7 @@ class PlotConfigRepository(PlotService, ConfigurationRepository):
             )
 
         # Replace that entry. The key stays the id the caller already kept.
-        plots[plot.id] = self._entry(plot)
+        plots[plot.id] = plot_data.to_primitive(self.default_role)
         full_data['plots'] = plots
         self._save(full_data)
 

@@ -34,7 +34,7 @@ plots:
     kind: line
     description: Revenue compared across regions.
     series:
-      revenue:
+      - id: revenue
         name: Revenue
         marks:
           - role: x
@@ -188,7 +188,7 @@ def seeded_plot_file(tmp_path) -> str:
     :rtype: str
     '''
 
-    # Seed the file shape: plot id is the key, series id is the nested key.
+    # Seed the file shape: plot id is the key, series are nested in the body.
     path = tmp_path / 'seeded.yml'
     path.write_text(SEEDED_PLOT_YAML, encoding='utf-8')
     return str(path)
@@ -227,10 +227,11 @@ def test_save_round_trips_line_and_bar(tmp_path, suffix):
         assert 'database' not in body
         assert 'file_path' not in body
         assert set(body) <= {'name', 'kind', 'description', 'series'}
-        assert set(body['series']) == {series.id for series in plot.series}
-        for series in plot.series:
-            series_body = body['series'][series.id]
-            assert 'id' not in series_body
+        assert isinstance(body['series'], list)
+        assert [item['id'] for item in body['series']] == [
+            series.id for series in plot.series
+        ]
+        for series, series_body in zip(plot.series, body['series']):
             assert series_body['name'] == series.name
             assert 'renderer' not in series_body
 
@@ -294,14 +295,14 @@ def test_update_replaces_kept_record_without_changing_id(tmp_path):
     assert repo.get('quarterly_sales') is None
     assert repo.get('cost_of_goods') is None
 
-    # The file key did not follow the new name, and the series key did not either.
+    # The file key did not follow the new name. The series id was not re-derived.
     body = repo._load()['plots']['Custom-Id']
+    series_ids = [item['id'] for item in body['series']]
     assert body['name'] == 'Quarterly Sales'
     assert 'id' not in body
-    assert 'rev-1' in body['series']
-    assert 'cost_of_goods' not in body['series']
-    assert body['series']['rev-1']['name'] == 'Cost of Goods'
-    assert 'id' not in body['series']['rev-1']
+    assert series_ids == ['rev-1', 'cost-1']
+    assert 'cost_of_goods' not in series_ids
+    assert body['series'][0]['name'] == 'Cost of Goods'
 
 # ** test: update_of_missing_id_fails_and_does_not_insert
 def test_update_of_missing_id_fails_and_does_not_insert(tmp_path):
