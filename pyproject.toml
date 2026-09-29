@@ -1,6 +1,6 @@
 [project]
 name = "tiferet-plot"
-version = "0.0.0"
+dynamic = ["version"]
 description = "A Tiferet library for defining, persisting, and rendering plots, with Matplotlib as the first renderer."
 authors = [
     { name = "Andrew Shatz, Great Strength Systems", email = "andrew@greatstrength.me" }
@@ -25,6 +25,9 @@ Repository = "https://github.com/greatstrength/tiferet-plot"
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "tiferet_plot.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
