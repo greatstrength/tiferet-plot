@@ -36,6 +36,8 @@ include = [
     "tiferet_plot.mappers",
     "tiferet_plot.repos",
     "tiferet_plot.utils",
+    "tiferet_plot.contexts",
+    "tiferet_plot.blueprints",
 ]
 
 [tool.pytest.ini_options]
