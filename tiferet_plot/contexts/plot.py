@@ -5,6 +5,9 @@
 # ** core
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+# ** infra
+from pydantic import ValidationError
+
 # ** app
 from tiferet.contexts.app import AppSessionContext, raise_unwired_handler_error
 from tiferet.contexts.cache import CacheContext
@@ -13,6 +16,7 @@ from ..domain.plot import (
     Mark,
     Plot,
     Series,
+    _addition_matches,
     _is_blank,
     _snake_case,
 )
@@ -332,6 +336,36 @@ def _extended_marks(series: Series, addition: Series) -> List[Mark]:
         for mark in series.marks
     ]
 
+# ** function: _require_matching_addition
+def _require_matching_addition(series: Series, addition: Series) -> None:
+    '''
+    Fail unless the addition carries this series' roles and sorts.
+
+    The failure is the same validation error declaration raises. The
+    marks are not changed here.
+
+    :param series: The series being extended.
+    :type series: Series
+    :param addition: The values to add, already legal for the kind.
+    :type addition: Series
+    :return: None
+    :rtype: None
+    '''
+
+    # A mismatched role or sort is a declaration failure, not a new record.
+    try:
+        _addition_matches(series, addition)
+    except ValueError as error:
+        raise ValidationError.from_exception_data(
+            'Plot',
+            [{
+                'type': 'value_error',
+                'loc': ('series',),
+                'input': addition.marks,
+                'ctx': {'error': error},
+            }],
+        ) from error
+
 # *** contexts
 
 # ** context: plotter_session_context
@@ -557,8 +591,9 @@ class PlotterSessionContext(AppSessionContext):
         '''
         Add one series to the open plot.
 
-        Marks are the role-and-values structure the kind already
-        requires. A missing or blank series id is derived once from
+        Marks are a role and its values. A line or a scatter may
+        include label, and x or y may be text, when the plot's sort
+        rules hold. A missing or blank series id is derived once from
         the series name. A supplied series id is kept. The plot id is
         not recomputed.
 
@@ -613,10 +648,11 @@ class PlotterSessionContext(AppSessionContext):
         '''
         Add values to an existing series' marks.
 
-        The series is addressed by id, not by name. Every required role
-        is present, no other role is present, and the added sequences
-        are non-empty and of equal length. A failure leaves the marks
-        unchanged.
+        The series is addressed by id, not by name. The addition carries
+        exactly the roles that series already carries, including label
+        when the series has it. Sorts match that series. The added
+        sequences are non-empty and of equal length. A failure leaves
+        the marks unchanged.
 
         :param series_id: The id of the series to extend.
         :type series_id: str
@@ -657,6 +693,9 @@ class PlotterSessionContext(AppSessionContext):
             y_title=self._open['y_title'],
             y_unit=self._open['y_unit'],
         )
+
+        # Roles and sorts must match this series, not merely be legal alone.
+        _require_matching_addition(current, addition)
 
         # Rebuild every series. Only the addressed series gains values.
         rebuilt = []

@@ -1272,3 +1272,95 @@ def test_create_handler_passes_title_and_y_title():
     assert matrix_event.kwargs['title'] == 'Quarterly sales by region'
     assert 'x_title' not in matrix_event.kwargs
     assert 'y_title' not in matrix_event.kwargs
+
+# ** test: add_series_has_no_labels_parameter
+def test_add_series_has_no_labels_parameter():
+    '''
+    add_series takes marks. It does not take a labels argument.
+    '''
+
+    # Text rides on the marks. It is not a second parameter.
+    assert 'labels' not in inspect.signature(
+        PlotterSessionContext.add_series).parameters
+    assert 'rotation' not in inspect.signature(
+        PlotterSessionContext.add_series).parameters
+
+# ** test: draft_add_series_and_append_do_not_derive_ids_from_text
+def test_draft_add_series_and_append_do_not_derive_ids_from_text():
+    '''
+    Text on x and label does not become the plot id or the series id.
+    '''
+
+    # Draft derives the plot id from the name. The text is not that name.
+    session = bound(create=lambda record: record)
+    session.draft('Design Response', 'line')
+    session.add_series('Trial', [
+        Mark(role='x', values=('alpha', 'beta')),
+        Mark(role='y', values=(1, 2)),
+        Mark(role='label', values=('run-1', 'run-2')),
+    ])
+    assert session.append('trial', [
+        Mark(role='x', values=('gamma',)),
+        Mark(role='y', values=(3,)),
+        Mark(role='label', values=('run-3',)),
+    ]) is session
+    kept = session.create()
+
+    # Neither id was recomputed from the text. The roles stayed.
+    assert kept.id == 'design_response'
+    assert kept.series[0].id == 'trial'
+    assert kept.id not in ('alpha', 'beta', 'gamma', 'run-1', 'run-3')
+    assert kept.series[0].id not in ('alpha', 'beta', 'gamma', 'run-1', 'run-3')
+    assert mark_values(kept) == [
+        ('alpha', 'beta', 'gamma'),
+        (1, 2, 3),
+        ('run-1', 'run-2', 'run-3'),
+    ]
+
+# ** test: append_role_and_sort_mismatches_leave_the_marks_unchanged
+def test_append_role_and_sort_mismatches_leave_the_marks_unchanged():
+    '''
+    An addition that does not match the series' roles or sorts changes nothing.
+    '''
+
+    # A labeled text-x series rejects a missing label and a numeric x.
+    session = bound(create=lambda record: record)
+    session.draft('Design Response', 'line')
+    labeled = [
+        Mark(role='x', values=('alpha', 'beta')),
+        Mark(role='y', values=(1, 2)),
+        Mark(role='label', values=('run-1', 'run-2')),
+    ]
+    session.add_series('Trial', labeled)
+    with pytest.raises(ValidationError):
+        session.append('trial', [
+            Mark(role='x', values=('gamma',)),
+            Mark(role='y', values=(3,)),
+        ])
+    with pytest.raises(ValidationError):
+        session.append('trial', [
+            Mark(role='x', values=(9,)),
+            Mark(role='y', values=(3,)),
+            Mark(role='label', values=('run-3',)),
+        ])
+    kept = session.create()
+    assert kept.id == 'design_response'
+    assert kept.series[0].id == 'trial'
+    assert mark_values(kept) == [
+        ('alpha', 'beta'),
+        (1, 2),
+        ('run-1', 'run-2'),
+    ]
+
+    # A series without label rejects an addition that includes one.
+    session = bound(create=lambda record: record)
+    session.draft('Sales by Region', 'line')
+    session.add_series('Revenue', line_marks())
+    with pytest.raises(ValidationError):
+        session.append('revenue', line_marks(x=(5,), y=(6,)) + [
+            Mark(role='label', values=('run-3',)),
+        ])
+    kept = session.create()
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+    assert mark_values(kept) == [(1, 2), (3, 4)]
