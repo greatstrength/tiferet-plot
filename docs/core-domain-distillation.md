@@ -17,6 +17,8 @@ The core domain is **declaring a plot as a record, keeping that record, renderin
 
 A plot is not a Matplotlib figure. It is a named claim, the data that claim depends on, and the marks that express that data. The picture is produced from the record. Matplotlib is the first tool that produces the picture. It is not a field of the record.
 
+The catalog name is how the record is found. It is not the display title. `title` is an optional field on a plot and on a matrix: the descriptive display title. Declaration and keep do not copy the name into `title`. The title text a later drawer reads is `title` when that field is present and not blank, otherwise the name. That reading is not stored back into `title`. `description` is the subtitle. It is not a separate subtitle field, and it is not identity. Axis title and unit are four optional plot fields: `x_title`, `x_unit`, `y_title`, and `y_unit`. They are not mark roles, and a matrix does not carry them. A cell plot may carry the plot's title and axis text. Those strings are not the grid title. Drawing that text is a later step. It is not part of declaring the record.
+
 The domain has one shape:
 
 > **Declare** → **Keep** → **Render** → **Show**
@@ -33,15 +35,21 @@ Render does not require a store. A record can be drawn before it is kept. Show c
 
 ## 3. Ubiquitous language
 
-**Plot** — the declared record. It has an identity, a name, a kind, and one or more series. It does not have a renderer, a file path, or a database handle.
+**Plot** — the declared record. It has an identity, a name, a kind, one or more series, an optional display title, an optional description, and optional axis text. The name is the catalog name. It is not the display title. The plot does not have a renderer, a file path, or a database handle.
 
-**Series** — one named binding of data to marks inside a plot. A plot has at least one. Whether a series is a child object or a nested field is a containment choice. The record still has series either way. Renaming a series is an edit to the record, not a new plot.
+**Series** — one named binding of data to marks inside a plot. A plot has at least one. Whether a series is a child object or a nested field is a containment choice. The record still has series either way. Renaming a series is an edit to the record, not a new plot. A series has no title, no description, and no axis text.
 
-**Mark** — how a series expresses its data for a kind: the values, and the role those values play (for example an x position, a y position, or a bar height). The kind decides which marks are required. The renderer decides how a mark is drawn.
+**Mark** — how a series expresses its data for a kind: the values, and the role those values play (for example an x position, a y position, or a bar height). The kind decides which marks are required. The renderer decides how a mark is drawn. Axis text is not a mark role.
 
-**Kind** — one of the chart types the record may claim to be. Supplied by the caller. Not discovered from the data. The first set is line, scatter, and bar.
+**Kind** — one of the chart types the record may claim to be. Supplied by the caller. Not discovered from the data. The first set is line, scatter, and bar. Kind does not add or remove title or axis text.
 
-**Declaration** — the act of building a plot record from a name, a kind, and its series. Declaration does not draw and does not save.
+**Title** — the optional display title of a plot or a matrix. Not the catalog name, and not identity. Omitted and blank are the same case: no title, stored as absent. The title text a later drawer reads is `title` when present and not blank, otherwise the name. That fallback is not written back into `title`.
+
+**Description** — optional claim text beside the name. It is the subtitle a later drawer reads when it is present and not blank. It is not a separate subtitle field, and it is not identity. A blank description is no subtitle text. Storage of a supplied description is otherwise unchanged.
+
+**Axis text** — `x_title`, `x_unit`, `y_title`, and `y_unit`, optional fields of a plot. A title may be present without its unit, and a unit without its title. They are not concatenated in the record. They are not mark roles. A matrix does not carry them. For a bar, `x_title` and `x_unit` are the text of the axis `category` is marked on, and `y_title` and `y_unit` are the text of the axis `height` is marked on. Those mark roles are not renamed.
+
+**Declaration** — the act of building a plot record from a name, a kind, its series, and any optional title, description, and axis text. Declaration does not draw, does not save, and does not derive an id from title or from axis text.
 
 **Record** — a plot after it has been declared. The same word covers an in-memory record and a kept record. Keeping changes where it lives, not what it is.
 
@@ -93,11 +101,11 @@ There is no feature catalog to mirror. Section 6 says so.
 
 The precedent is `Formula` (`tiferet:examples/basic_calculator/app/domain/formula.py (16-34)`). It is a read-only domain object. Identity and derived fields are filled by a validator before construction (`tiferet:examples/basic_calculator/app/domain/formula.py (36-65)`), not by a factory method on the side. Mutation, when a record must change, lives on the aggregate (`tiferet:examples/basic_calculator/app/mappers/formula.py (14-49)`). The domain object does not import a store or a drawing library.
 
-A plot declaration produces a record: identity, name, kind, and series. It does not produce a picture and it does not write a file.
+A plot declaration produces a record: identity, name, kind, series, an optional display title, an optional description, and optional axis text. It does not produce a picture and it does not write a file. It does not fill `title` from `name`. Omitted and blank title and axis text are stored as absent, not as empty strings.
 
 **Agnostic on renderer and store.** Neither is an input to declaration. **Variable on kind.** Line, scatter, and bar do not require the same marks. The shared record shape is built once. The mark rules are the kind's rulebook.
 
-The formula precedent derives `id` from `name` when `id` is missing (`tiferet:examples/basic_calculator/app/domain/formula.py (55-57)`). That is a convenience, and it will collide if two plots share a title. A publication record needs an identity that is not a silent rewrite of its name. Section 8 records that. RFP-001 has to close it.
+The formula precedent derives `id` from `name` when `id` is missing (`tiferet:examples/basic_calculator/app/domain/formula.py (55-57)`). That convenience is not a display title. A plot's display title is the optional `title` field. Declaration does not copy `name` into `title`, and it does not derive `id` from `title` or from axis text. A missing id is the snake_case of the catalog name, once. A supplied id is kept. Renaming the name does not recompute the id and does not rewrite a supplied title. Two records may share a display title and remain two records. Section 8 records the seam.
 
 ### 5.2 Keep
 
@@ -182,7 +190,8 @@ The import law allows an event to import a utility. That permission does not mak
 
 **Built once**
 
-- The plot record: identity, name, kind, series.
+- The plot record: identity, name, kind, series, optional display title, optional description, and optional axis text. The catalog name is not the display title. Id is not derived from title or from axis text.
+- A matrix record carries an optional display title and does not carry axis text. A cell plot may carry the plot's title and axis text. Those are not the grid title.
 - The plot service contract: exists, get, list, save, delete.
 - Create, get, and list as events on that contract. Create does not render.
 - The session handlers for create and show, and the rule that `App(...)` will not select the session.
@@ -201,7 +210,7 @@ These are seams in the precedents, not files in this repository. They are listed
 - `ListFormulas.execute` returns a display string (`tiferet:examples/basic_calculator/app/events/formula.py (145-163)`). Retrieval and presentation are one event. Show must not be that. A list of plots returns records. A picture comes from render.
 - `record_run_handler` resolves its event on the `app` flag (`tiferet:examples/basic_calculator/app/blueprints/calc.py:133`) while the bounded-context services are registered on `calc` (`tiferet:examples/basic_calculator/app/blueprints/calc.py:111`). The split is correct for a session-level history event. It is the wrong place for a renderer. A renderer registered on `app` because the show handler already closes over `app` would hide the drawing tool inside framework infrastructure.
 - `build_app` constructs `AppSessionContext` by name (`tiferet:tiferet/blueprints/app.py (34-35)`, `tiferet:tiferet/blueprints/app.py (76-79)`). A session configuration that names a plotter context class will not be honored. The calculator already documents that (`tiferet:examples/basic_calculator/app/blueprints/calc.py (144-147)`). Treating configuration as the way to select the session is the entanglement.
-- `Formula._derive_fields` writes `id` from `name` when `id` is absent (`tiferet:examples/basic_calculator/app/domain/formula.py (55-57)`). Identity and title are coupled. Two publication records with the same title become one record. The plot id must not be a silent function of the name.
+- `Formula._derive_fields` writes `id` from `name` when `id` is absent (`tiferet:examples/basic_calculator/app/domain/formula.py (55-57)`). That convenience must not be mistaken for a display title. Identity and display title are not the same field. Declaration does not copy the catalog name into `title`, and it does not derive `id` from `title`. Two publication records with the same display title remain two records. A missing id is still the snake_case of the catalog name, once, and a rename does not recompute it.
 - The architecture skill lists `utils` as a legal import for `events` (`tiferet:.agents/skills/tiferet-code-architecture/SKILL.md:25`). The formula events do not use that permission (`tiferet:examples/basic_calculator/app/events/formula.py (8-12)`). An event that imported Matplotlib because the skill allows utilities would entangle render with create. The import law is not the domain boundary.
 
 The file repository is not an entanglement. `FormulaService` does not mention YAML (`tiferet:examples/basic_calculator/app/interfaces/formula.py (14-16)`). The path sits on the repository constructor (`tiferet:examples/basic_calculator/app/repos/formula.py:22`). A database store that added a file argument to the plot record would be the entanglement. The precedent does not do that.
