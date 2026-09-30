@@ -937,3 +937,163 @@ def test_matrix_events_do_not_import_a_drawing_tool_or_a_repository():
     assert 'PlotEvent' not in source
     assert 'PlotService' not in source
     assert 'png' not in Path(events_module.__file__).read_text().lower()
+
+# ** test: create_plot_carries_title_and_axis_text
+def test_create_plot_carries_title_and_axis_text():
+    '''
+    CreatePlot accepts title and axis text and does not derive an id from them.
+    '''
+
+    # The new arguments are keywords. They do not move id or description.
+    params = inspect.signature(CreatePlot.execute).parameters
+    assert list(params)[:5] == ['self', 'name', 'kind', 'series', 'id']
+    assert params['description'].default is None
+    assert params['title'].kind is inspect.Parameter.KEYWORD_ONLY
+    for name in ('title', 'x_title', 'x_unit', 'y_title', 'y_unit'):
+        assert name in params
+        assert params[name].default is None
+
+    # Omitted text stays absent. The result is a record, not a picture.
+    service = FakePlotService()
+    omitted = run(
+        CreatePlot,
+        service,
+        name='Sales by Region',
+        kind='line',
+        series=line_series(),
+        description='Revenue compared across regions.',
+    )
+    assert omitted.id == 'sales_by_region'
+    assert omitted.title is None
+    assert omitted.y_title is None
+    assert omitted.description == 'Revenue compared across regions.'
+    assert not isinstance(omitted, (bytes, str))
+
+    # A supplied id is kept. Title and axis text do not rewrite it.
+    kept = run(
+        CreatePlot,
+        FakePlotService(),
+        id='Custom-Id',
+        name='Sales by Region',
+        kind='line',
+        series=line_series(),
+        description='A claim.',
+        title='Quarterly sales, 2024',
+        x_title='Year',
+        y_title='Revenue',
+        y_unit='USD',
+    )
+    assert kept.id == 'Custom-Id'
+    assert kept.title == 'Quarterly sales, 2024'
+    assert kept.x_title == 'Year'
+    assert kept.y_unit == 'USD'
+    assert kept.description == 'A claim.'
+
+    # A second create of that id fails. The first record stays.
+    with pytest.raises(TiferetError) as caught:
+        run(
+            CreatePlot,
+            service,
+            name='Sales by Region',
+            kind='line',
+            series=line_series(),
+            title='A different title',
+        )
+    assert caught.value.error_code == PLOT_ALREADY_KEPT_ID
+    assert service.get('sales_by_region').title is None
+
+# ** test: update_plot_can_change_or_clear_figure_text
+def test_update_plot_can_change_or_clear_figure_text():
+    '''
+    Update can change title or a unit. Omitting either clears it.
+    '''
+
+    # Keep a record that already has title and axis text.
+    service = FakePlotService()
+    run(
+        CreatePlot,
+        service,
+        id='Custom-Id',
+        name='Sales by Region',
+        kind='line',
+        series=line_series(),
+        title='Quarterly sales, 2024',
+        y_title='Revenue',
+        y_unit='USD',
+    )
+    changed = run(
+        UpdatePlot,
+        service,
+        id='Custom-Id',
+        name='Quarterly Sales',
+        kind='line',
+        series=line_series(),
+        title='A later title',
+        y_title='Revenue',
+        y_unit='EUR',
+    )
+
+    # The id did not follow the new name, the title, or the unit.
+    assert changed.id == 'Custom-Id'
+    assert changed.name == 'Quarterly Sales'
+    assert changed.title == 'A later title'
+    assert changed.y_unit == 'EUR'
+    assert service.get('quarterly_sales') is None
+
+    # An omitted title and an omitted unit are cleared, not merged.
+    cleared = run(
+        UpdatePlot,
+        service,
+        id='Custom-Id',
+        name='Quarterly Sales',
+        kind='line',
+        series=line_series(),
+        y_title='Revenue',
+    )
+    assert cleared.id == 'Custom-Id'
+    assert cleared.title is None
+    assert cleared.y_unit is None
+    assert cleared.y_title == 'Revenue'
+
+# ** test: create_matrix_accepts_title_and_not_axis_text
+def test_create_matrix_accepts_title_and_not_axis_text():
+    '''
+    CreateMatrix accepts title. It does not gain an axis parameter.
+    '''
+
+    # Title is optional. Axis text is not a matrix parameter.
+    params = inspect.signature(CreateMatrix.execute).parameters
+    assert 'title' in params
+    assert params['title'].default is None
+    for name in ('x_title', 'x_unit', 'y_title', 'y_unit'):
+        assert name not in params
+    assert 'x_title' not in inspect.signature(UpdateMatrix.execute).parameters
+
+    # A supplied title is kept. The id still comes from the name.
+    service = MemoryMatrixService()
+    matrix = DomainEvent.handle(
+        CreateMatrix,
+        dependencies={'matrix_service': service},
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+        title='Quarterly sales by region',
+    )
+    assert matrix.id == 'sales_by_region'
+    assert matrix.title == 'Quarterly sales by region'
+    assert not isinstance(matrix, bytes)
+
+    # An omitted title on update clears it and does not change the id.
+    updated = DomainEvent.handle(
+        UpdateMatrix,
+        dependencies={'matrix_service': service},
+        id='sales_by_region',
+        name='Quarterly Sales',
+        rows=1,
+        cols=1,
+        cells=[cell()],
+    )
+    assert updated.id == 'sales_by_region'
+    assert updated.title is None
+    assert service.get('quarterly_sales') is None

@@ -1105,3 +1105,150 @@ def test_show_does_not_read_or_drop_an_open_draft():
     assert calls == [(RENDERER_SERVICE_ID, (PLOT_FLAG,))]
     with pytest.raises(ValueError):
         session.draft('Other', 'line')
+
+# ** test: draft_carries_title_and_does_not_shift_the_id
+def test_draft_carries_title_and_does_not_shift_the_id():
+    '''
+    draft keeps title through add_series. A third positional argument is the id.
+    '''
+
+    # There is no chain method that sets this text after draft.
+    for name in (
+        'set_title',
+        'set_x_title',
+        'set_x_unit',
+        'set_y_title',
+        'set_y_unit',
+        'set_subtitle',
+    ):
+        assert not hasattr(PlotterSessionContext, name)
+
+    # A later series does not clear the text the draft set, or recompute the id.
+    session = bound(create=lambda record: record)
+    session.draft(
+        'Sales by Region',
+        'line',
+        title='Quarterly sales, 2024',
+        x_title='Year',
+        y_unit='USD',
+    )
+    session.add_series('Revenue', line_marks())
+    kept = session.create()
+    assert kept.id == 'sales_by_region'
+    assert kept.title == 'Quarterly sales, 2024'
+    assert kept.x_title == 'Year'
+    assert kept.y_unit == 'USD'
+    assert kept.x_unit is None
+
+    # The third positional argument is still the id, not the title.
+    session.draft('Sales by Region', 'line', 'custom-id')
+    session.add_series('Revenue', line_marks())
+    positional = session.create()
+    assert positional.id == 'custom-id'
+    assert positional.title is None
+
+# ** test: edit_and_update_send_figure_text
+def test_edit_and_update_send_figure_text():
+    '''
+    edit copies title. update sends title and the axis fields without changing the id.
+    '''
+
+    # The caller already holds the title. edit does not derive an id from it.
+    original = Plot(
+        id='Custom-Id',
+        name='Sales by Region',
+        kind='line',
+        title='Quarterly sales, 2024',
+        x_title='Year',
+        y_unit='USD',
+        series=[
+            Series(id='revenue', name='Revenue', marks=line_marks()),
+        ],
+    )
+    event = RecordingEvent(None)
+
+    def execute(**kwargs):
+        '''
+        Record the update call and return a record with the supplied id.
+
+        :param kwargs: The event arguments.
+        :type kwargs: dict
+        :return: The kept record.
+        :rtype: Plot
+        '''
+
+        # The chain sends the text it copied. It does not derive an id.
+        event.kwargs = kwargs
+        event.result = Plot(
+            id=kwargs['id'],
+            name=kwargs['name'],
+            kind=kwargs['kind'],
+            description=kwargs.get('description'),
+            title=kwargs.get('title'),
+            x_title=kwargs.get('x_title'),
+            y_unit=kwargs.get('y_unit'),
+            series=kwargs['series'],
+        )
+        return event.result
+
+    event.execute = execute
+    get_dependency, calls = resolver({
+        UPDATE_PLOT_EVENT_ID: event,
+    })
+    session = bound(get_dependency=get_dependency)
+    assert session.edit(original) is session
+    kept = session.update()
+    assert calls == [(UPDATE_PLOT_EVENT_ID, (PLOT_FLAG,))]
+    assert event.kwargs['id'] == 'Custom-Id'
+    assert event.kwargs['title'] == 'Quarterly sales, 2024'
+    assert event.kwargs['x_title'] == 'Year'
+    assert event.kwargs['y_unit'] == 'USD'
+    assert kept.id == 'Custom-Id'
+    assert kept.title == 'Quarterly sales, 2024'
+    assert original.title == 'Quarterly sales, 2024'
+
+# ** test: create_handler_passes_title_and_y_title
+def test_create_handler_passes_title_and_y_title():
+    '''
+    The session create handler passes title and y_title for a finished plot.
+    '''
+
+    # A finished plot carries both strings. A matrix carries title only.
+    plot = Plot(
+        id='sales_by_region',
+        name='Sales by Region',
+        kind='line',
+        title='Quarterly sales, 2024',
+        y_title='Revenue',
+        series=[
+            Series(id='revenue', name='Revenue', marks=line_marks()),
+        ],
+    )
+    grid = PlotMatrix(
+        id='sales_by_region',
+        name='Sales by Region',
+        title='Quarterly sales by region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=plot),
+        ],
+    )
+    plot_event = RecordingEvent('kept-plot')
+    matrix_event = RecordingEvent('kept-matrix')
+    get_dependency, _calls = resolver({
+        CREATE_PLOT_EVENT_ID: plot_event,
+        CREATE_MATRIX_EVENT_ID: matrix_event,
+    })
+    session = bound(create=create_handler(get_dependency))
+    assert session.create(plot) == 'kept-plot'
+    assert plot_event.kwargs['title'] == 'Quarterly sales, 2024'
+    assert plot_event.kwargs['y_title'] == 'Revenue'
+    assert plot_event.kwargs['id'] == plot.id
+    assert plot_event.kwargs['description'] == plot.description
+
+    # A matrix passes title and does not gain an axis parameter.
+    assert session.create(grid) == 'kept-matrix'
+    assert matrix_event.kwargs['title'] == 'Quarterly sales by region'
+    assert 'x_title' not in matrix_event.kwargs
+    assert 'y_title' not in matrix_event.kwargs

@@ -140,6 +140,11 @@ def test_declaration_derives_ids_and_excludes_renderer_and_store():
         'name',
         'kind',
         'description',
+        'title',
+        'x_title',
+        'x_unit',
+        'y_title',
+        'y_unit',
         'series',
     }
     assert 'renderer' not in Plot.model_fields
@@ -517,6 +522,7 @@ def test_matrix_declaration_derives_id_and_keeps_the_cell_plot():
         'id',
         'name',
         'description',
+        'title',
         'rows',
         'cols',
         'cells',
@@ -692,3 +698,293 @@ def test_plot_does_not_become_a_matrix():
         MatrixCell(row=0, col=0, plot=line_plot(), description='Not a cell field.')
     with pytest.raises(ValidationError):
         MatrixCell(row=0, col=0, plot='revenue_plot')
+
+# ** test: title_is_not_the_catalog_name_and_not_identity
+def test_title_is_not_the_catalog_name_and_not_identity():
+    '''
+    A missing title stays absent. A supplied title does not derive the id.
+    '''
+
+    # No title and no axis text. The id still comes from the name.
+    bare = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert bare.id == 'sales_by_region'
+    assert 'subtitle' not in Plot.model_fields
+    assert bare.title is None
+    assert bare.x_title is None
+    assert bare.x_unit is None
+    assert bare.y_title is None
+    assert bare.y_unit is None
+    assert bare.title_text == 'Sales by Region'
+    assert bare.model_dump()['title'] is None
+    assert 'title_text' not in bare.model_dump()
+    assert 'subtitle' not in bare.model_dump()
+
+    # Description is the subtitle. It is not copied to another field.
+    described = Plot(
+        name='Sales by Region',
+        description='Revenue compared across regions.',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert described.description == 'Revenue compared across regions.'
+    assert described.subtitle_text == 'Revenue compared across regions.'
+    assert described.id == 'sales_by_region'
+    assert 'subtitle' not in described.model_dump()
+
+    # A blank description stays stored. It is no subtitle for a later drawer.
+    blank_description = Plot(
+        name='Sales by Region',
+        description='   ',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert blank_description.description == '   '
+    assert blank_description.subtitle_text is None
+
+    # A supplied title is kept. It does not rewrite a supplied id.
+    titled = Plot(
+        id='Custom-Id',
+        name='Sales by Region',
+        title='Quarterly sales, 2024',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert titled.title == 'Quarterly sales, 2024'
+    assert titled.id == 'Custom-Id'
+    assert titled.title_text == 'Quarterly sales, 2024'
+    assert titled.title_text != titled.name
+
+# ** test: blank_figure_text_is_absent
+@pytest.mark.parametrize('field', [
+    'title',
+    'x_title',
+    'x_unit',
+    'y_title',
+    'y_unit',
+])
+def test_blank_figure_text_is_absent(field):
+    '''
+    A blank title or axis field is stored as absent, not as an empty string.
+    '''
+
+    # Whitespace is blank. The name is not copied into the field.
+    plot = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+        **{field: '   '},
+    )
+    assert getattr(plot, field) is None
+    assert plot.name == 'Sales by Region'
+    assert plot.id == 'sales_by_region'
+
+# ** test: axis_text_is_not_identity
+def test_axis_text_is_not_identity():
+    '''
+    Axis title and unit are kept, and they do not rewrite the id.
+    '''
+
+    # A title may be present without its unit, and a unit without its title.
+    plot = Plot(
+        id='Custom-Id',
+        name='Sales by Region',
+        title='Quarterly sales, 2024',
+        kind='line',
+        x_title='Year',
+        y_title='Revenue',
+        y_unit='USD',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+            Series(name='Cost', marks=line_marks((5, 6), (7, 8))),
+        ],
+    )
+
+    # One plot has one title and one x title. The id was supplied.
+    assert plot.x_title == 'Year'
+    assert plot.x_unit is None
+    assert plot.y_title == 'Revenue'
+    assert plot.y_unit == 'USD'
+    assert plot.id == 'Custom-Id'
+    assert plot.title == 'Quarterly sales, 2024'
+    assert len(plot.series) == 2
+
+    # Series do not carry figure text. Those strings are not mark roles.
+    for name in ('title', 'x_title', 'x_unit', 'y_title', 'y_unit'):
+        assert name not in Series.model_fields
+    with pytest.raises(ValidationError):
+        Series(name='Revenue', title='Not a series title', marks=line_marks())
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Sales by Region',
+            kind='line',
+            series=[
+                Series(
+                    name='Revenue',
+                    marks=line_marks() + [Mark(role='x_title', values=('Year', 'Year'))],
+                ),
+            ],
+        )
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Sales by Region',
+            kind='line',
+            series=[
+                Series(
+                    name='Revenue',
+                    marks=line_marks() + [Mark(role='title', values=('A', 'B'))],
+                ),
+            ],
+        )
+
+# ** test: bar_uses_the_same_axis_fields
+def test_bar_uses_the_same_axis_fields():
+    '''
+    A bar may carry x and y text. It still requires category and height.
+    '''
+
+    # The axis fields do not rename the mark roles.
+    bar = Plot(
+        name='Sales by Region',
+        kind='bar',
+        x_title='Region',
+        y_title='Revenue',
+        series=[
+            Series(name='Revenue', marks=bar_marks()),
+        ],
+    )
+    assert bar.x_title == 'Region'
+    assert bar.y_title == 'Revenue'
+    assert bar.id == 'sales_by_region'
+    assert 'category_title' not in Plot.model_fields
+    assert 'height_title' not in Plot.model_fields
+
+    # x and y remain illegal mark roles on a bar.
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Sales by Region',
+            kind='bar',
+            x_title='Region',
+            y_title='Revenue',
+            series=[
+                Series(
+                    name='Revenue',
+                    marks=bar_marks() + [Mark(role='x', values=(1, 2))],
+                ),
+            ],
+        )
+
+# ** test: changing_title_does_not_recompute_the_id
+def test_changing_title_does_not_recompute_the_id():
+    '''
+    A rename keeps a supplied title. Changing the title keeps the id.
+    '''
+
+    # The id was derived once. The title is a different string.
+    plot = Plot(
+        name='Sales by Region',
+        title='Quarterly sales, 2024',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    renamed = plot.model_copy(update={'name': 'Quarterly Sales'})
+    assert renamed.id == 'sales_by_region'
+    assert renamed.title == 'Quarterly sales, 2024'
+    assert renamed.title_text == 'Quarterly sales, 2024'
+
+    # An absent title means the drawer reads the new name.
+    unnamed = plot.model_copy(update={'name': 'Quarterly Sales', 'title': None})
+    assert unnamed.id == 'sales_by_region'
+    assert unnamed.title is None
+    assert unnamed.title_text == 'Quarterly Sales'
+
+    # Changing the title does not recompute the id.
+    retitled = plot.model_copy(update={'title': 'A different sentence'})
+    assert retitled.id == 'sales_by_region'
+    assert retitled.title_text == 'A different sentence'
+
+# ** test: matrix_title_is_not_a_cell_title
+def test_matrix_title_is_not_a_cell_title():
+    '''
+    A matrix title is the grid title. Axis text and a cell title are not.
+    '''
+
+    # No title is not filled from the name. A matrix has no axis text.
+    bare = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    assert bare.title is None
+    assert bare.id == 'sales_by_region'
+    assert bare.title_text == 'Sales by Region'
+    assert 'x_title' not in PlotMatrix.model_fields
+    with pytest.raises(ValidationError):
+        PlotMatrix(
+            name='Sales by Region',
+            x_title='Year',
+            rows=1,
+            cols=1,
+            cells=[
+                MatrixCell(row=0, col=0, plot=line_plot()),
+            ],
+        )
+
+    # A supplied matrix title is kept and does not change the id.
+    titled = PlotMatrix(
+        name='Sales by Region',
+        title='Quarterly sales by region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    assert titled.title == 'Quarterly sales by region'
+    assert titled.id == 'sales_by_region'
+    assert titled.title_text == 'Quarterly sales by region'
+
+    # A cell title does not become the grid title.
+    cell_plot = Plot(
+        id='revenue_plot',
+        name='Revenue',
+        title='Cell title',
+        x_title='Year',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        title='Quarterly sales by region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=cell_plot),
+        ],
+    )
+    assert matrix.name == 'Sales by Region'
+    assert matrix.title == 'Quarterly sales by region'
+    assert matrix.title_text == 'Quarterly sales by region'
+    assert matrix.cells[0].plot.title == 'Cell title'
+    assert matrix.cells[0].plot.x_title == 'Year'
+    assert matrix.cells[0].plot.title_text == 'Cell title'
