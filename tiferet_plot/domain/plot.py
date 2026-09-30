@@ -4,6 +4,7 @@
 
 # ** core
 from __future__ import annotations
+import re
 from typing import Any, Sequence
 
 # ** infra
@@ -91,6 +92,79 @@ ADDITION_SORT_MISMATCH_ID = 'ADDITION_SORT_MISMATCH'
 ADDITION_SORT_MISMATCH_MESSAGE = (
     'The addition plays mark role {role} as {addition_sort} values, '
     'and this series plays it as {series_sort} values.'
+)
+
+# ** constant: css_color_names
+CSS_COLOR_NAMES = (
+    'aqua',
+    'black',
+    'blue',
+    'fuchsia',
+    'gray',
+    'green',
+    'lime',
+    'maroon',
+    'navy',
+    'olive',
+    'purple',
+    'red',
+    'silver',
+    'teal',
+    'white',
+    'yellow',
+)
+
+# ** constant: hex_color
+HEX_COLOR = re.compile(r'^#[0-9A-Fa-f]{6}$')
+
+# ** constant: linestyles
+LINESTYLES = (
+    'solid',
+    'dashed',
+    'dotted',
+    'dashdot',
+)
+
+# ** constant: markers
+MARKERS = (
+    'no_marker',
+    'circle',
+    'square',
+    'triangle',
+    'diamond',
+    'x',
+    'plus',
+    'point',
+)
+
+# ** constant: legend_locations
+LEGEND_LOCATIONS = (
+    'upper_right',
+    'upper_left',
+    'lower_left',
+    'lower_right',
+    'outside_right',
+)
+
+# ** constant: font_families
+FONT_FAMILIES = (
+    'serif',
+    'sans-serif',
+    'monospace',
+)
+
+# ** constant: absent_color_cycle
+ABSENT_COLOR_CYCLE = (
+    '#1f77b4',
+    '#ff7f0e',
+    '#2ca02c',
+    '#d62728',
+    '#9467bd',
+    '#8c564b',
+    '#e377c2',
+    '#7f7f7f',
+    '#bcbd22',
+    '#17becf',
 )
 
 # *** functions
@@ -518,6 +592,317 @@ def _validate_series(kind: str, series: Sequence[Series]) -> None:
                     f'Series disagree on the sort of mark role {role!r}.'
                 )
 
+        # A present style the kind does not show fails. An absent one does not.
+        _validate_series_style(kind, item)
+
+# ** function: _optional_bool
+def _optional_bool(value: Any) -> Any:
+    '''
+    Keep a supplied bool. Do not coerce text or a number.
+
+    Omitted is absent. ``false`` as text is not the bool ``False``.
+
+    :param value: The raw bool.
+    :type value: Any
+    :return: The bool, or None when it was omitted.
+    :rtype: Any
+    '''
+
+    # Omitted stays absent. It is not stored as true or false.
+    if value is None:
+        return None
+
+    # A string is not coerced. A bool is not a width of 1.
+    if not isinstance(value, bool):
+        raise ValueError('A bool is required.')
+
+    # Return the supplied bool. False is a value, not a blank.
+    return value
+
+# ** function: _optional_number
+def _optional_number(value: Any,
+        *,
+        positive: bool = False,
+        nonnegative: bool = False) -> Any:
+    '''
+    Keep a supplied number. Reject a bool and text.
+
+    Text that looks like a number is not a number. A bool is not a
+    width of 1. The supplied int or float is not rewritten.
+
+    :param value: The raw number.
+    :type value: Any
+    :param positive: When true, zero and negatives fail.
+    :type positive: bool
+    :param nonnegative: When true, negatives fail and zero is kept.
+    :type nonnegative: bool
+    :return: The supplied number, or None when it was omitted.
+    :rtype: Any
+    '''
+
+    # Omitted stays absent. A default is not written back.
+    if value is None:
+        return None
+
+    # Reject bool before int, because bool is a subclass of int.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError('A number is required.')
+
+    # A size is positive. Zero is not a width.
+    if positive and not value > 0:
+        raise ValueError('The number must be positive.')
+
+    # Spacing may be zero. A negative gap is not a fraction of the cell.
+    if nonnegative and value < 0:
+        raise ValueError('The number must not be negative.')
+
+    # Return the supplied number. Do not coerce an int to a float.
+    return value
+
+# ** function: _optional_decimals
+def _optional_decimals(value: Any) -> Any:
+    '''
+    Keep a supplied non-negative integer decimal count.
+
+    A float, a bool, a negative number, and text fail. Zero is a
+    supplied value, not an omitted one.
+
+    :param value: The raw decimal count.
+    :type value: Any
+    :return: The integer, or None when it was omitted.
+    :rtype: Any
+    '''
+
+    # Omitted means the drawer does not set a numeric format.
+    if value is None:
+        return None
+
+    # A float is not an integer. A bool is not a count of 1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('A non-negative integer is required.')
+
+    # Zero shows no digits after the decimal. A negative count fails.
+    if value < 0:
+        raise ValueError('A decimal count must not be negative.')
+
+    # Return the supplied count. Do not treat zero as absent.
+    return value
+
+# ** function: _optional_token
+def _optional_token(value: Any, allowed: Sequence[str]) -> Any:
+    '''
+    Keep a token from a closed set. Do not coerce a near spelling.
+
+    :param value: The raw token.
+    :type value: Any
+    :param allowed: The closed set.
+    :type allowed: Sequence[str]
+    :return: The token, or None when it was omitted.
+    :rtype: Any
+    '''
+
+    # Omitted stays absent. The drawer default is not written back.
+    if value is None:
+        return None
+
+    # The tool's own spelling is not this token.
+    if not isinstance(value, str) or value not in allowed:
+        choices = ', '.join(allowed)
+        raise ValueError(f'{value!r} is not one of {choices}.')
+
+    # Return the supplied token. Do not rewrite it.
+    return value
+
+# ** function: _normalize_color
+def _normalize_color(value: Any) -> Any:
+    '''
+    Store a series color as lowercase hex or a CSS Level 1 name.
+
+    ``grey`` is stored as ``gray``. A name is not rewritten to hex,
+    and a hex is not rewritten to a name. An unknown name fails here,
+    without a drawing tool.
+
+    :param value: The raw color.
+    :type value: Any
+    :return: The stored color, or None when it was omitted or blank.
+    :rtype: Any
+    '''
+
+    # Omitted and blank are absent. A cycle hex is not written back.
+    if _is_blank(value):
+        return None
+
+    # A color is text. A number is not a color.
+    if not isinstance(value, str):
+        raise ValueError('A color must be text.')
+
+    # A hex is six digits. Short and eight-digit forms fail.
+    if value.startswith('#'):
+        if HEX_COLOR.fullmatch(value) is None:
+            raise ValueError(
+                f'Color {value!r} is not # plus six hex digits '
+                'or a CSS Level 1 name.'
+            )
+        return value.lower()
+
+    # Lowercase before the grey alias, so GREY is stored as gray.
+    name = value.lower()
+    if name == 'grey':
+        name = 'gray'
+    if name not in CSS_COLOR_NAMES:
+        raise ValueError(
+            f'Color {value!r} is not # plus six hex digits '
+            'or a CSS Level 1 name.'
+        )
+
+    # A name stays a name. It is not replaced by a hex.
+    return name
+
+# ** function: _validate_series_style
+def _validate_series_style(kind: str, series: Series) -> None:
+    '''
+    Reject a present style field the kind does not show.
+
+    Kind does not add or remove the field. An absent value is legal
+    on every kind. A stored value the picture does not show is not.
+
+    :param kind: The plot kind.
+    :type kind: str
+    :param series: The series whose style is checked.
+    :type series: Series
+    :return: None
+    :rtype: None
+    '''
+
+    # Line is the only kind that shows a stroke.
+    if kind != 'line':
+        if series.linestyle is not None:
+            raise ValueError(f'Kind {kind!r} does not use linestyle.')
+        if series.linewidth is not None:
+            raise ValueError(f'Kind {kind!r} does not use linewidth.')
+
+    # A bar has no marker. A present marker or size would not be shown.
+    if kind == 'bar':
+        if series.marker is not None:
+            raise ValueError(f'Kind {kind!r} does not use marker.')
+        if series.markersize is not None:
+            raise ValueError(f'Kind {kind!r} does not use markersize.')
+
+    # Bar width is a bar scale. A line or a scatter does not show it.
+    if kind != 'bar' and series.bar_width is not None:
+        raise ValueError(f'Kind {kind!r} does not use bar_width.')
+
+# ** function: _legend_text
+def _legend_text(series: Series) -> str:
+    '''
+    Return the legend text a later drawer reads.
+
+    The text is ``legend_label`` when it is present. Otherwise it is
+    the series name. This does not write the name back onto the label.
+
+    :param series: The series.
+    :type series: Series
+    :return: The legend text.
+    :rtype: str
+    '''
+
+    # A present label is the text. An absent label falls back, unread back.
+    if series.legend_label:
+        return series.legend_label
+    return series.name
+
+# ** function: _effective_color
+def _effective_color(series: Series, index: int) -> str:
+    '''
+    Return the color a grid swatch compares.
+
+    A stored color is used as stored. A name is not rewritten to hex.
+    An absent color is the cycle hex for this series' index in its own
+    cell, and that hex is not written back.
+
+    :param series: The series.
+    :type series: Series
+    :param index: The series index in its own cell, from zero.
+    :type index: int
+    :return: The effective color.
+    :rtype: str
+    '''
+
+    # A present color is not replaced by the cycle, and not rewritten.
+    if series.color is not None:
+        return series.color
+
+    # The cycle is the absent-color rule. It is not a theme field.
+    return ABSENT_COLOR_CYCLE[index % len(ABSENT_COLOR_CYCLE)]
+
+# ** function: _swatch
+def _swatch(kind: str, series: Series, index: int) -> tuple:
+    '''
+    Return the swatch a grid legend compares.
+
+    Linewidth, marker size, and bar width are not part of the swatch.
+    Absent linestyle is solid. Absent line marker is no marker. Absent
+    scatter marker is circle. A bar has no marker shape.
+
+    :param kind: The cell plot kind.
+    :type kind: str
+    :param series: The series.
+    :type series: Series
+    :param index: The series index in its own cell, from zero.
+    :type index: int
+    :return: The swatch.
+    :rtype: tuple
+    '''
+
+    # Color is stored as given, or the cycle hex when absent.
+    color = _effective_color(series, index)
+
+    # A bar swatch is its color. It has no marker shape.
+    if kind == 'bar':
+        return (kind, color)
+
+    # A scatter swatch is the marker. Absent means circle, not stored.
+    if kind == 'scatter':
+        marker = 'circle' if series.marker is None else series.marker
+        return (kind, color, marker)
+
+    # A line swatch is the stroke and the marker. Absences are not stored.
+    linestyle = 'solid' if series.linestyle is None else series.linestyle
+    marker = 'no_marker' if series.marker is None else series.marker
+    return (kind, color, linestyle, marker)
+
+# ** function: _validate_grid_legend
+def _validate_grid_legend(matrix: PlotMatrix) -> None:
+    '''
+    Fail when a requested grid legend cannot agree on a swatch.
+
+    The check runs only when the matrix asks for a legend. The union
+    is not stored. A cell's own legend flag does not filter it.
+
+    :param matrix: The declared matrix.
+    :type matrix: PlotMatrix
+    :return: None
+    :rtype: None
+    '''
+
+    # Absent and false do not ask. The cells stay legal either way.
+    if matrix.show_legend is not True:
+        return
+
+    # Order is row, then column, then series order inside the cell.
+    owned = {}
+    cells = sorted(matrix.cells, key=lambda cell: (cell.row, cell.col))
+    for cell in cells:
+        for index, series in enumerate(cell.plot.series):
+            text = _legend_text(series)
+            swatch = _swatch(cell.plot.kind, series, index)
+            previous = owned.get(text)
+            if previous is not None and previous != swatch:
+                raise ValueError(
+                    f'Grid legend text {text!r} has disagreeing swatches.'
+                )
+            owned.setdefault(text, swatch)
+
 # *** models
 
 # ** model: mark
@@ -567,6 +952,48 @@ class Series(DomainObject):
     marks: list[Mark] = Field(
         ...,
         description='The role-and-values marks this series carries.',
+    )
+
+    # * attribute: legend_label
+    legend_label: str | None = Field(
+        default=None,
+        description='Optional legend text. Blank is absent. Not derived from the name.',
+    )
+
+    # * attribute: color
+    color: str | None = Field(
+        default=None,
+        description='Optional series color. Six-digit hex or a CSS Level 1 name.',
+    )
+
+    # * attribute: linestyle
+    linestyle: str | None = Field(
+        default=None,
+        description='Optional line style. One of solid, dashed, dotted, or dashdot.',
+    )
+
+    # * attribute: linewidth
+    linewidth: int | float | None = Field(
+        default=None,
+        description='Optional line width in points. Positive. Line only.',
+    )
+
+    # * attribute: marker
+    marker: str | None = Field(
+        default=None,
+        description='Optional marker token. Line and scatter only. Not a tool code.',
+    )
+
+    # * attribute: markersize
+    markersize: int | float | None = Field(
+        default=None,
+        description='Optional marker size in points. Positive. Line and scatter only.',
+    )
+
+    # * attribute: bar_width
+    bar_width: int | float | None = Field(
+        default=None,
+        description='Optional scale of the grouped-bar slot width. Positive. Bar only.',
     )
 
     # * method: verify_addition
@@ -632,6 +1059,176 @@ class Series(DomainObject):
                     model=self,
                     role=mark.role,
                 )
+
+    # * method: legend_text (property)
+    legend_label: str | None = Field(
+        default=None,
+        description='Optional legend text. Blank is absent. Not derived from the name.',
+    )
+
+    # * attribute: color
+    color: str | None = Field(
+        default=None,
+        description='Optional series color. Six-digit hex or a CSS Level 1 name.',
+    )
+
+    # * attribute: linestyle
+    linestyle: str | None = Field(
+        default=None,
+        description='Optional line style. One of solid, dashed, dotted, or dashdot.',
+    )
+
+    # * attribute: linewidth
+    linewidth: int | float | None = Field(
+        default=None,
+        description='Optional line width in points. Positive. Line only.',
+    )
+
+    # * attribute: marker
+    marker: str | None = Field(
+        default=None,
+        description='Optional marker token. Line and scatter only. Not a tool code.',
+    )
+
+    # * attribute: markersize
+    markersize: int | float | None = Field(
+        default=None,
+        description='Optional marker size in points. Positive. Line and scatter only.',
+    )
+
+    # * attribute: bar_width
+    bar_width: int | float | None = Field(
+        default=None,
+        description='Optional scale of the grouped-bar slot width. Positive. Bar only.',
+    )
+
+    # * method: legend_text (property)
+    @property
+    def legend_text(self) -> str:
+        '''
+        Return the legend text a later drawer reads.
+
+        A present label is that text. An absent label is the series name.
+        The name is not written back onto the label.
+
+        :return: The legend text.
+        :rtype: str
+        '''
+
+        # The fallback is a reading. It is not a stored default.
+        return _legend_text(self)
+
+    # * method: _normalize_legend_label (field validator)
+    @field_validator('legend_label', mode='before')
+    @classmethod
+    def _normalize_legend_label(cls, value: Any) -> Any:
+        '''
+        Store a blank legend label as absent.
+
+        :param value: The raw label.
+        :type value: Any
+        :return: The label, or None when it was omitted or blank.
+        :rtype: Any
+        '''
+
+        # Do not fill the label from the series name.
+        return _absent_text(value)
+
+    # * method: _normalize_color (field validator)
+    @field_validator('color', mode='before')
+    @classmethod
+    def _normalize_color(cls, value: Any) -> Any:
+        '''
+        Store a legal color, or fail without a drawing tool.
+
+        :param value: The raw color.
+        :type value: Any
+        :return: The stored color, or None when it was omitted or blank.
+        :rtype: Any
+        '''
+
+        # Names and hex are checked here. Matplotlib is not imported.
+        return _normalize_color(value)
+
+    # * method: _validate_linestyle (field validator)
+    @field_validator('linestyle', mode='before')
+    @classmethod
+    def _validate_linestyle(cls, value: Any) -> Any:
+        '''
+        Reject a linestyle outside the closed set.
+
+        :param value: The raw linestyle.
+        :type value: Any
+        :return: The linestyle, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # The tool spelling is not this token.
+        return _optional_token(value, LINESTYLES)
+
+    # * method: _validate_linewidth (field validator)
+    @field_validator('linewidth', mode='before')
+    @classmethod
+    def _validate_linewidth(cls, value: Any) -> Any:
+        '''
+        Reject a linewidth that is not a positive number.
+
+        :param value: The raw linewidth.
+        :type value: Any
+        :return: The linewidth, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A bool is not a width of 1. Text is not a width.
+        return _optional_number(value, positive=True)
+
+    # * method: _validate_marker (field validator)
+    @field_validator('marker', mode='before')
+    @classmethod
+    def _validate_marker(cls, value: Any) -> Any:
+        '''
+        Reject a marker outside the closed set.
+
+        :param value: The raw marker.
+        :type value: Any
+        :return: The marker, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A tool code is not a stored marker.
+        return _optional_token(value, MARKERS)
+
+    # * method: _validate_markersize (field validator)
+    @field_validator('markersize', mode='before')
+    @classmethod
+    def _validate_markersize(cls, value: Any) -> Any:
+        '''
+        Reject a marker size that is not a positive number.
+
+        :param value: The raw marker size.
+        :type value: Any
+        :return: The marker size, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A size does not invent a marker. It is only a number.
+        return _optional_number(value, positive=True)
+
+    # * method: _validate_bar_width (field validator)
+    @field_validator('bar_width', mode='before')
+    @classmethod
+    def _validate_bar_width(cls, value: Any) -> Any:
+        '''
+        Reject a bar width that is not a positive scale.
+
+        :param value: The raw bar width.
+        :type value: Any
+        :return: The scale, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # The scale is not rewritten to the slot width.
+        return _optional_number(value, positive=True)
 
     # * method: _derive_id (model validator)
     @model_validator(mode='before')
@@ -718,6 +1315,84 @@ class Plot(DomainObject):
         ...,
         min_length=1,
         description='The series in this plot. A plot has at least one.',
+    )
+
+    # * attribute: show_legend
+    show_legend: bool | None = Field(
+        default=None,
+        description='Optional legend flag. Omitted is not stored as true.',
+    )
+
+    # * attribute: legend_location
+    legend_location: str | None = Field(
+        default=None,
+        description='Optional legend place. Not best, and not a coordinate pair.',
+    )
+
+    # * attribute: legend_title
+    legend_title: str | None = Field(
+        default=None,
+        description='Optional legend title. Blank is absent. Not filled from the name.',
+    )
+
+    # * attribute: title_size
+    title_size: int | float | None = Field(
+        default=None,
+        description='Optional title size in points. Positive. Absent is not stored as 12.',
+    )
+
+    # * attribute: subtitle_size
+    subtitle_size: int | float | None = Field(
+        default=None,
+        description='Optional subtitle size in points. Positive. Absent is not stored as 10.',
+    )
+
+    # * attribute: axis_label_size
+    axis_label_size: int | float | None = Field(
+        default=None,
+        description='Optional axis-label size in points. One size for both axes.',
+    )
+
+    # * attribute: tick_label_size
+    tick_label_size: int | float | None = Field(
+        default=None,
+        description='Optional tick-label size in points. One size for every tick.',
+    )
+
+    # * attribute: legend_size
+    legend_size: int | float | None = Field(
+        default=None,
+        description='Optional legend size in points. Positive. Absent is not stored as 10.',
+    )
+
+    # * attribute: x_tick_rotation
+    x_tick_rotation: int | float | None = Field(
+        default=None,
+        description='Optional x tick rotation in degrees. Not rewritten modulo 360.',
+    )
+
+    # * attribute: y_tick_rotation
+    y_tick_rotation: int | float | None = Field(
+        default=None,
+        description='Optional y tick rotation in degrees. Not rewritten modulo 360.',
+    )
+
+    # * attribute: x_tick_decimals
+    x_tick_decimals: int | None = Field(
+        default=None,
+        description='Optional x decimal count. Zero is supplied. Absent is not zero.',
+    )
+
+    # * attribute: y_tick_decimals
+    y_tick_decimals: int | None = Field(
+        default=None,
+        description='Optional y decimal count. Zero is supplied. Absent is not zero.',
+    )
+
+    # * attribute: font_family
+    font_family: str | None = Field(
+        default=None,
+        description='Optional font family. One of serif, sans-serif, or monospace.',
     )
 
     # * method: is_matrix (property)
@@ -846,6 +1521,125 @@ class Plot(DomainObject):
         # Blank and omitted are the same case. Do not store an empty string.
         return _absent_text(value)
 
+    # * method: _validate_show_legend (field validator)
+    @field_validator('show_legend', mode='before')
+    @classmethod
+    def _validate_show_legend(cls, value: Any) -> Any:
+        '''
+        Reject a legend flag that is not a bool.
+
+        :param value: The raw flag.
+        :type value: Any
+        :return: The bool, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # Text is not coerced. Omitted is not stored as true.
+        return _optional_bool(value)
+
+    # * method: _validate_legend_location (field validator)
+    @field_validator('legend_location', mode='before')
+    @classmethod
+    def _validate_legend_location(cls, value: Any) -> Any:
+        '''
+        Reject a legend place outside the closed set.
+
+        :param value: The raw location.
+        :type value: Any
+        :return: The location, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # best and the tool's spelling are not this token.
+        return _optional_token(value, LEGEND_LOCATIONS)
+
+    # * method: _validate_legend_title (field validator)
+    @field_validator('legend_title', mode='before')
+    @classmethod
+    def _validate_legend_title(cls, value: Any) -> Any:
+        '''
+        Store a blank legend title as absent.
+
+        :param value: The raw title.
+        :type value: Any
+        :return: The title, or None when it was omitted or blank.
+        :rtype: Any
+        '''
+
+        # Do not fill the title from the plot name.
+        return _absent_text(value)
+
+    # * method: _validate_text_size (field validator)
+    @field_validator(
+        'title_size',
+        'subtitle_size',
+        'axis_label_size',
+        'tick_label_size',
+        'legend_size',
+        mode='before',
+    )
+    @classmethod
+    def _validate_text_size(cls, value: Any) -> Any:
+        '''
+        Reject a text size that is not a positive number.
+
+        :param value: The raw size.
+        :type value: Any
+        :return: The size, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A named size is a catalog. Text that looks like a number is not a size.
+        return _optional_number(value, positive=True)
+
+    # * method: _validate_tick_rotation (field validator)
+    @field_validator('x_tick_rotation', 'y_tick_rotation', mode='before')
+    @classmethod
+    def _validate_tick_rotation(cls, value: Any) -> Any:
+        '''
+        Reject a tick rotation that is not a number.
+
+        :param value: The raw rotation.
+        :type value: Any
+        :return: The rotation, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A float is legal. The value is not rewritten modulo 360.
+        return _optional_number(value)
+
+    # * method: _validate_tick_decimals (field validator)
+    @field_validator('x_tick_decimals', 'y_tick_decimals', mode='before')
+    @classmethod
+    def _validate_tick_decimals(cls, value: Any) -> Any:
+        '''
+        Reject a decimal count that is not a non-negative integer.
+
+        :param value: The raw count.
+        :type value: Any
+        :return: The count, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # Zero is supplied. A float is not an integer count.
+        return _optional_decimals(value)
+
+    # * method: _validate_font_family (field validator)
+    @field_validator('font_family', mode='before')
+    @classmethod
+    def _validate_font_family(cls, value: Any) -> Any:
+        '''
+        Reject a font family outside the closed set.
+
+        :param value: The raw family.
+        :type value: Any
+        :return: The family, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A raw family name is not this token.
+        return _optional_token(value, FONT_FAMILIES)
+
     # * method: _validate_declaration (model validator)
     @model_validator(mode='after')
     def _validate_declaration(self) -> Plot:
@@ -973,6 +1767,60 @@ class PlotMatrix(DomainObject):
         description='The occupied cells. An empty corner is not a cell.',
     )
 
+    # * attribute: show_legend
+    show_legend: bool | None = Field(
+        default=None,
+        description='Optional grid-legend flag. Omitted is not stored as false.',
+    )
+
+    # * attribute: legend_location
+    legend_location: str | None = Field(
+        default=None,
+        description='Optional grid-legend place. Not best, and not a coordinate pair.',
+    )
+
+    # * attribute: legend_title
+    legend_title: str | None = Field(
+        default=None,
+        description='Optional grid-legend title. Blank is absent. Not filled from the name.',
+    )
+
+    # * attribute: title_size
+    title_size: int | float | None = Field(
+        default=None,
+        description='Optional grid-title size in points. Positive. Absent is not stored as 12.',
+    )
+
+    # * attribute: subtitle_size
+    subtitle_size: int | float | None = Field(
+        default=None,
+        description='Optional grid-subtitle size in points. Positive. Absent is not stored as 10.',
+    )
+
+    # * attribute: legend_size
+    legend_size: int | float | None = Field(
+        default=None,
+        description='Optional grid-legend size in points. Positive. Absent is not stored as 10.',
+    )
+
+    # * attribute: font_family
+    font_family: str | None = Field(
+        default=None,
+        description='Optional grid font family. One of serif, sans-serif, or monospace.',
+    )
+
+    # * attribute: row_spacing
+    row_spacing: int | float | None = Field(
+        default=None,
+        description='Optional row gap as a fraction of average cell height. Zero is legal.',
+    )
+
+    # * attribute: col_spacing
+    col_spacing: int | float | None = Field(
+        default=None,
+        description='Optional column gap as a fraction of average cell width. Zero is legal.',
+    )
+
     # * method: is_matrix (property)
     @property
     def is_matrix(self) -> bool:
@@ -1058,11 +1906,115 @@ class PlotMatrix(DomainObject):
         # Fill a missing id once. A supplied id is kept as given.
         return _fill_id(data)
 
+    # * method: _validate_show_legend (field validator)
+    @field_validator('show_legend', mode='before')
+    @classmethod
+    def _validate_show_legend(cls, value: Any) -> Any:
+        '''
+        Reject a grid-legend flag that is not a bool.
+
+        :param value: The raw flag.
+        :type value: Any
+        :return: The bool, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # Text is not coerced. Omitted is not stored as false.
+        return _optional_bool(value)
+
+    # * method: _validate_legend_location (field validator)
+    @field_validator('legend_location', mode='before')
+    @classmethod
+    def _validate_legend_location(cls, value: Any) -> Any:
+        '''
+        Reject a grid-legend place outside the closed set.
+
+        :param value: The raw location.
+        :type value: Any
+        :return: The location, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # best and the tool's spelling are not this token.
+        return _optional_token(value, LEGEND_LOCATIONS)
+
+    # * method: _validate_legend_title (field validator)
+    @field_validator('legend_title', mode='before')
+    @classmethod
+    def _validate_legend_title(cls, value: Any) -> Any:
+        '''
+        Store a blank grid-legend title as absent.
+
+        :param value: The raw title.
+        :type value: Any
+        :return: The title, or None when it was omitted or blank.
+        :rtype: Any
+        '''
+
+        # Do not fill the title from the matrix name.
+        return _absent_text(value)
+
+    # * method: _validate_text_size (field validator)
+    @field_validator(
+        'title_size',
+        'subtitle_size',
+        'legend_size',
+        mode='before',
+    )
+    @classmethod
+    def _validate_text_size(cls, value: Any) -> Any:
+        '''
+        Reject a grid text size that is not a positive number.
+
+        :param value: The raw size.
+        :type value: Any
+        :return: The size, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A named size is a catalog. Text that looks like a number is not a size.
+        return _optional_number(value, positive=True)
+
+    # * method: _validate_font_family (field validator)
+    @field_validator('font_family', mode='before')
+    @classmethod
+    def _validate_font_family(cls, value: Any) -> Any:
+        '''
+        Reject a grid font family outside the closed set.
+
+        :param value: The raw family.
+        :type value: Any
+        :return: The family, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # A raw family name is not this token.
+        return _optional_token(value, FONT_FAMILIES)
+
+    # * method: _validate_spacing (field validator)
+    @field_validator('row_spacing', 'col_spacing', mode='before')
+    @classmethod
+    def _validate_spacing(cls, value: Any) -> Any:
+        '''
+        Reject a spacing that is not a non-negative number.
+
+        :param value: The raw spacing.
+        :type value: Any
+        :return: The spacing, or None when it was omitted.
+        :rtype: Any
+        '''
+
+        # Zero is a supplied gap. A bool is not a gap of 1.
+        return _optional_number(value, nonnegative=True)
+
     # * method: _validate_grid (model validator)
     @model_validator(mode='after')
     def _validate_grid(self) -> PlotMatrix:
         '''
         Check that each cell sits in the declared grid and on its own position.
+
+        A requested grid legend fails when two series share legend text
+        and disagree on the swatch. The union is not stored.
 
         :return: The validated matrix.
         :rtype: PlotMatrix
@@ -1070,6 +2022,9 @@ class PlotMatrix(DomainObject):
 
         # The author declared the grid. Do not shrink it to the occupied cells.
         _validate_cell_positions(self.rows, self.cols, self.cells)
+
+        # Ask only when the matrix asks. A cell flag does not filter the union.
+        _validate_grid_legend(self)
 
         # Return the declared record. Nothing has been drawn or saved.
         return self
