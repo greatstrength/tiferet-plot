@@ -57,6 +57,37 @@ TEXT_MARK_ROLES = (
 
 # *** functions
 
+# ** function: _picture_size
+def _picture_size(width, height) -> tuple:
+    '''
+    Require a positive width and height in inches.
+
+    A bool is not a width of 1. Text that looks like a number is not a
+    size. Zero and a negative number are not a picture. There is no
+    default.
+
+    :param width: The picture width.
+    :type width: Any
+    :param height: The picture height.
+    :type height: Any
+    :return: The width and height, unchanged.
+    :rtype: tuple
+    '''
+
+    # Check each extent. Do not coerce text, and do not fill a missing one.
+    for name, value in (('width', width), ('height', height)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f'{name.capitalize()} must be a positive number of inches.'
+            )
+        if value <= 0:
+            raise ValueError(
+                f'{name.capitalize()} must be a positive number of inches.'
+            )
+
+    # Return the pair the caller named. It is not stored on the record.
+    return width, height
+
 # ** function: _is_numeric
 def _is_numeric(value) -> bool:
     '''
@@ -225,12 +256,17 @@ def _read_png(png: bytes):
     return mpl_image.imread(io.BytesIO(png), format='png')
 
 # ** function: _compose_grid
-def _compose_grid(rows: int, cols: int, pictures: list) -> bytes:
+def _compose_grid(rows: int,
+        cols: int,
+        pictures: list,
+        width: float,
+        height: float) -> bytes:
     '''
     Place occupied-cell pictures on the declared grid.
 
     Empty positions stay empty. The result is one picture, not one
-    picture per cell.
+    picture per cell. Width and height are that picture's size. Rows
+    and columns place the cells. They do not choose the size.
 
     :param rows: The declared row count.
     :type rows: int
@@ -238,12 +274,16 @@ def _compose_grid(rows: int, cols: int, pictures: list) -> bytes:
     :type cols: int
     :param pictures: ``(row, col, png)`` for each occupied cell.
     :type pictures: list
+    :param width: The picture width, in inches.
+    :type width: float
+    :param height: The picture height, in inches.
+    :type height: float
     :return: The grid as PNG bytes.
     :rtype: bytes
     '''
 
-    # Size the figure by the declared grid, so an empty corner takes space.
-    figure = Figure(figsize=(4 * cols, 3 * rows))
+    # Size the figure by the requested pair. An empty corner still takes a cell.
+    figure = Figure(figsize=(width, height))
     FigureCanvasAgg(figure)
     axes_grid = figure.subplots(nrows=rows, ncols=cols, squeeze=False)
     for row in range(rows):
@@ -273,24 +313,35 @@ class MatplotlibRenderer(RendererService):
     '''
 
     # * method: render
-    def render(self, plot: PlotAggregate) -> bytes:
+    def render(self,
+            plot: PlotAggregate,
+            width: float,
+            height: float) -> bytes:
         '''
-        Render a plot record to PNG bytes.
+        Render a plot record to PNG bytes of the given size.
 
-        An unsaved record is a valid input. An illegal kind or illegal
-        marks raise, and no picture is returned.
+        An unsaved record is a valid input. An illegal size, an illegal
+        kind, or illegal marks raise, and no picture is returned. Width
+        and height are inches. They are not fields of the plot.
 
         :param plot: The declared plot record.
         :type plot: PlotAggregate
+        :param width: The picture width, in inches.
+        :type width: float
+        :param height: The picture height, in inches.
+        :type height: float
         :return: The picture as PNG bytes.
         :rtype: bytes
         '''
 
+        # Refuse a size that is not a picture. Do not start a figure.
+        width, height = _picture_size(width, height)
+
         # Refuse a record this renderer cannot draw. Do not start a picture.
         series_values = _drawable_series(plot)
 
-        # Draw on a plain default figure. Nothing is written to a path.
-        figure = Figure()
+        # Draw at the requested size. Nothing is written to a path.
+        figure = Figure(figsize=(width, height))
         FigureCanvasAgg(figure)
         _draw(figure.add_subplot(111), plot.kind, series_values)
 
@@ -300,24 +351,46 @@ class MatplotlibRenderer(RendererService):
         return buffer.getvalue()
 
     # * method: render_matrix
-    def render_matrix(self, matrix: PlotMatrixAggregate) -> bytes:
+    def render_matrix(self,
+            matrix: PlotMatrixAggregate,
+            width: float,
+            height: float) -> bytes:
         '''
-        Render a declared grid to one PNG.
+        Render a declared grid to one PNG of the given size.
 
-        Each occupied cell is drawn by ``render`` and placed at its row
-        and column. An empty position is not drawn. An unsaved matrix is
-        a valid input. If any occupied cell fails, no picture is returned.
+        Each occupied cell is drawn by ``render`` with that same width
+        and height, and placed at its row and column. An empty position
+        is not drawn. The pair is the grid picture's size, not a size
+        per cell. An unsaved matrix is a valid input. If the size is
+        illegal, or any occupied cell fails, no picture is returned.
 
         :param matrix: The declared matrix.
         :type matrix: PlotMatrixAggregate
+        :param width: The picture width, in inches.
+        :type width: float
+        :param height: The picture height, in inches.
+        :type height: float
         :return: The grid as PNG bytes.
         :rtype: bytes
         '''
 
-        # Draw every occupied cell first. A failure returns no grid.
+        # Refuse a size that is not a picture. Do not draw a cell.
+        width, height = _picture_size(width, height)
+
+        # Draw every occupied cell at that same size. A failure returns no grid.
         pictures = []
         for cell in matrix.cells:
-            pictures.append((cell.row, cell.col, self.render(cell.plot)))
+            pictures.append((
+                cell.row,
+                cell.col,
+                self.render(cell.plot, width, height),
+            ))
 
-        # Place those pictures on the declared grid, including empty positions.
-        return _compose_grid(matrix.rows, matrix.cols, pictures)
+        # Place those pictures on one figure of the requested size.
+        return _compose_grid(
+            matrix.rows,
+            matrix.cols,
+            pictures,
+            width,
+            height,
+        )

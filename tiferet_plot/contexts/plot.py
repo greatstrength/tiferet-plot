@@ -157,8 +157,10 @@ def show_handler(get_dependency: Callable) -> Callable:
     Build the show handler.
 
     The handler resolves the renderer on the plot flag and returns the
-    picture bytes. It does not write a publication file. A line and a
-    bar use the same call.
+    picture bytes. It passes the caller's width and height through. It
+    does not store that pair, default it, or read it from the record.
+    It does not write a publication file. A line and a bar use the same
+    call.
 
     :param get_dependency: The DI resolution handler.
     :type get_dependency: Callable
@@ -167,7 +169,7 @@ def show_handler(get_dependency: Callable) -> Callable:
     '''
 
     # Return the handler closure bound to the resolver.
-    def handler(record: Any) -> bytes:
+    def handler(record: Any, width: float, height: float) -> bytes:
 
         # The record says whether it is a matrix. A non-record has no such description.
         is_matrix = record.is_matrix
@@ -175,12 +177,12 @@ def show_handler(get_dependency: Callable) -> Callable:
         # The drawing tool is a service on the plot flag, not an import here.
         renderer = get_dependency(RENDERER_SERVICE_ID, PLOT_FLAG)
 
-        # A matrix is one picture of the grid. A plot is one picture of the record.
+        # A matrix is one picture of the grid. The size is the caller's pair.
         if is_matrix:
-            return renderer.render_matrix(record)
+            return renderer.render_matrix(record, width, height)
 
-        # Kind does not choose a different show.
-        return renderer.render(record)
+        # Kind does not choose a different show. The size is not read from the record.
+        return renderer.render(record, width, height)
 
     # Return the closure.
     return handler
@@ -819,15 +821,24 @@ class PlotterSessionContext(AppSessionContext):
         return kept
 
     # * method: show
-    def show(self, record: Any) -> bytes:
+    def show(self,
+            record: Any,
+            width: float,
+            height: float) -> bytes:
         '''
-        Present the picture of a plot or a matrix.
+        Present the picture of a plot or a matrix at the given size.
 
-        The handler calls ``render`` or ``render_matrix`` and returns
-        the bytes. Placing the file is the caller's choice.
+        The handler calls ``render`` or ``render_matrix`` and passes the
+        width and height through. The session does not store the pair,
+        default it, or read it from the record. Placing the file is the
+        caller's choice.
 
         :param record: The finished plot or matrix.
         :type record: Any
+        :param width: The picture width, in inches.
+        :type width: float
+        :param height: The picture height, in inches.
+        :type height: float
         :return: The picture as PNG bytes.
         :rtype: bytes
         '''
@@ -839,5 +850,5 @@ class PlotterSessionContext(AppSessionContext):
                 self.domain.id,
             )
 
-        # The handler calls the renderer. This method does not open a store.
-        return self._show(record)
+        # Forward the pair. This method does not open a store or keep a size.
+        return self._show(record, width, height)

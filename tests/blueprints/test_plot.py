@@ -234,9 +234,9 @@ def test_show_returns_png_bytes_and_does_not_write_a_file(tmp_path):
     # An unsaved line, an unsaved bar, and an unsaved matrix all use show.
     path = tmp_path / 'publication.yml'
     session = create_plotter_session(plot_config=str(path))
-    line = session.show(line_plot())
-    bar = session.show(line_plot(kind='bar', plot_id='sales_bar'))
-    picture = session.show(grid())
+    line = session.show(line_plot(), 8, 4)
+    bar = session.show(line_plot(kind='bar', plot_id='sales_bar'), 8, 4)
+    picture = session.show(grid(), 8, 6)
 
     # The bytes are the picture. The publication file was not opened.
     assert line.startswith(PNG_SIGNATURE)
@@ -248,8 +248,15 @@ def test_show_returns_png_bytes_and_does_not_write_a_file(tmp_path):
     # Showing a kept record does not rewrite the publication.
     created = session.create(line_plot())
     before = path.read_bytes()
-    shown = session.show(created)
+    shown = session.show(created, 8, 4)
     assert shown.startswith(PNG_SIGNATURE)
+    assert path.read_bytes() == before
+
+    # Show does not invent a size. A missing or illegal pair returns no picture.
+    with pytest.raises(TypeError):
+        session.show(created)
+    with pytest.raises(ValueError):
+        session.show(created, 0, 4)
     assert path.read_bytes() == before
 
 # ** test: chain_create_keeps_the_settled_ids

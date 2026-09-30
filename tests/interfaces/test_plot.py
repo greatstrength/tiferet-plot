@@ -91,16 +91,21 @@ def test_renderer_service_does_not_import_matplotlib():
     assert 'Figure' not in source
     assert 'PlotService' not in source
 
-# ** test: render_returns_bytes_and_takes_only_a_plot
-def test_render_returns_bytes_and_takes_only_a_plot():
+# ** test: render_returns_bytes_for_a_sized_picture
+def test_render_returns_bytes_for_a_sized_picture():
     '''
-    render(plot) returns bytes. It does not take a path or a store.
+    render(plot, width, height) returns bytes. It does not take a path or a store.
     '''
 
-    # The contract is one plot in, PNG bytes out.
+    # The contract is one plot and one size in, PNG bytes out.
     signature = inspect.signature(RendererService.render)
-    assert list(signature.parameters) == ['self', 'plot']
+    assert list(signature.parameters) == ['self', 'plot', 'width', 'height']
+    assert signature.parameters['width'].default is inspect.Parameter.empty
+    assert signature.parameters['height'].default is inspect.Parameter.empty
     assert signature.return_annotation is bytes
+    source = inspect.getsource(RendererService.render)
+    for name in ('dpi', 'figsize', 'pixels'):
+        assert name not in source
 
     # The contract is not a usable renderer by itself.
     with pytest.raises(TypeError):
@@ -292,15 +297,25 @@ def test_render_matrix_is_a_second_method():
     render_matrix returns bytes. render does not gain a matrix parameter.
     '''
 
-    # The single-plot method is unchanged.
+    # The single-plot method takes the record, then the size. Not a cell size.
     render = inspect.signature(RendererService.render)
-    assert list(render.parameters) == ['self', 'plot']
+    assert list(render.parameters) == ['self', 'plot', 'width', 'height']
     assert render.return_annotation is bytes
 
-    # The grid is a second method, not a kind and not a heatmap.
+    # The grid is a second method. One pair covers that picture.
     render_matrix = inspect.signature(RendererService.render_matrix)
-    assert list(render_matrix.parameters) == ['self', 'matrix']
+    assert list(render_matrix.parameters) == [
+        'self',
+        'matrix',
+        'width',
+        'height',
+    ]
+    assert render_matrix.parameters['width'].default is inspect.Parameter.empty
+    assert render_matrix.parameters['height'].default is inspect.Parameter.empty
     assert render_matrix.return_annotation is bytes
+    source = inspect.getsource(RendererService)
+    for name in ('dpi', 'figsize', 'pixels', 'cell_width', 'cell_height'):
+        assert name not in source
     assert not hasattr(RendererService, 'heatmap')
     assert not hasattr(MatrixService, 'heatmap')
     source = inspect.getsource(RendererService)

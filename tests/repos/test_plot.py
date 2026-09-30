@@ -235,6 +235,8 @@ def test_save_round_trips_line_and_bar(tmp_path, suffix):
         assert 'renderer' not in body
         assert 'database' not in body
         assert 'file_path' not in body
+        assert 'width' not in body
+        assert 'height' not in body
         assert set(body) <= {'name', 'kind', 'description', 'series'}
         assert isinstance(body['series'], list)
         assert [item['id'] for item in body['series']] == [
@@ -686,9 +688,13 @@ def test_matrix_save_keeps_plots_and_round_trips_the_cell(tmp_path):
     assert body['cells'][0]['plot']['name'] == 'Cell Revenue'
     assert 'renderer' not in body
     assert 'file_path' not in body
+    assert 'width' not in body
+    assert 'height' not in body
 
     # Loading returns the cell record, not the plots-root record.
     loaded = repo.get('Custom-Id')
+    assert 'width' not in loaded.model_dump()
+    assert 'height' not in loaded.model_dump()
     assert loaded.id == 'Custom-Id'
     assert loaded.name == matrix.name
     assert loaded.description == matrix.description

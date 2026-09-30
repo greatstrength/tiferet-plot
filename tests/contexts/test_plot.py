@@ -27,6 +27,8 @@ from tiferet_plot.contexts.plot import (
     create_handler,
     show_handler,
 )
+from tiferet_plot.events.plot import CreateMatrix, CreatePlot, UpdatePlot
+from tiferet_plot.interfaces.plot import MatrixService, PlotService
 from tiferet_plot.domain.plot import (
     Mark,
     MatrixCell,
@@ -92,33 +94,41 @@ class RecordingRenderer:
         self.calls = []
 
     # * method: render
-    def render(self, plot) -> bytes:
+    def render(self, plot, width, height) -> bytes:
         '''
         Record a plot picture call.
 
         :param plot: The plot record.
         :type plot: Any
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
         :return: Sentinel picture bytes.
         :rtype: bytes
         '''
 
-        # Return bytes. Do not write a file.
-        self.calls.append(('render', plot))
+        # Return bytes. Do not write a file or read a size from the plot.
+        self.calls.append(('render', plot, width, height))
         return b'plot-png'
 
     # * method: render_matrix
-    def render_matrix(self, matrix) -> bytes:
+    def render_matrix(self, matrix, width, height) -> bytes:
         '''
         Record a matrix picture call.
 
         :param matrix: The matrix record.
         :type matrix: Any
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
         :return: Sentinel picture bytes.
         :rtype: bytes
         '''
 
-        # Return bytes. Do not write a file.
-        self.calls.append(('render_matrix', matrix))
+        # Return bytes. Do not write a file or invent a size per cell.
+        self.calls.append(('render_matrix', matrix, width, height))
         return b'matrix-png'
 
 # *** functions
@@ -361,6 +371,8 @@ def test_context_extends_the_hub_and_omits_domain_type():
     assert not hasattr(context_module, 'PlotterFluentContext')
     assert not hasattr(PlotterSessionContext, 'show_line')
     assert not hasattr(PlotterSessionContext, 'show_bar')
+    assert not hasattr(PlotterSessionContext, 'show_matrix')
+    assert not hasattr(context_module, 'show_matrix')
     assert not (Path(context_module.__file__).parent / 'fluent.py').exists()
 
 # ** test: unwired_handlers_fail
@@ -378,7 +390,7 @@ def test_unwired_handlers_fail():
     assert 'plotter' in caught.value.message
 
     with pytest.raises(TiferetAPIError) as caught:
-        session.show(plot)
+        session.show(plot, 8, 4)
     assert 'show_handler' in caught.value.message
 
     # The five framework handlers are still required.
@@ -438,9 +450,12 @@ def test_show_calls_render_or_render_matrix_on_the_plot_flag():
     session = bound(show=show_handler(get_dependency))
 
     # A line and a bar use the same show, and the same render call.
-    assert session.show(plot) == b'plot-png'
-    assert session.show(bar) == b'plot-png'
-    assert renderer.calls == [('render', plot), ('render', bar)]
+    assert session.show(plot, 8, 4) == b'plot-png'
+    assert session.show(bar, 4, 8) == b'plot-png'
+    assert renderer.calls == [
+        ('render', plot, 8, 4),
+        ('render', bar, 4, 8),
+    ]
     assert calls == [
         (RENDERER_SERVICE_ID, (PLOT_FLAG,)),
         (RENDERER_SERVICE_ID, (PLOT_FLAG,)),
@@ -448,9 +463,40 @@ def test_show_calls_render_or_render_matrix_on_the_plot_flag():
     assert all(flag != ('app',) for _, flag in calls)
 
     # A matrix is the other method. It is not a fourth kind.
-    assert session.show(grid) == b'matrix-png'
-    assert renderer.calls[-1] == ('render_matrix', grid)
+    assert session.show(grid, 8, 6) == b'matrix-png'
+    assert renderer.calls[-1] == ('render_matrix', grid, 8, 6)
     assert calls[-1] == (RENDERER_SERVICE_ID, (PLOT_FLAG,))
+
+    # Show forwards the pair. It does not default it or keep it.
+    signature = inspect.signature(PlotterSessionContext.show)
+    assert list(signature.parameters) == ['self', 'record', 'width', 'height']
+    assert signature.parameters['width'].default is inspect.Parameter.empty
+    assert signature.parameters['height'].default is inspect.Parameter.empty
+    assert not hasattr(plot, 'width')
+    assert not hasattr(session, 'width')
+    for method in (
+        PlotterSessionContext.draft,
+        PlotterSessionContext.edit,
+        PlotterSessionContext.add_series,
+        PlotterSessionContext.append,
+        PlotterSessionContext.create,
+        PlotterSessionContext.update,
+    ):
+        names = inspect.signature(method).parameters
+        assert 'width' not in names
+        assert 'height' not in names
+    for method in (
+        CreatePlot.execute,
+        UpdatePlot.execute,
+        CreateMatrix.execute,
+        PlotService.save,
+        PlotService.update,
+        MatrixService.save,
+        MatrixService.update,
+    ):
+        names = inspect.signature(method).parameters
+        assert 'width' not in names
+        assert 'height' not in names
 
 # ** test: a_non_record_is_not_created_or_shown
 def test_a_non_record_is_not_created_or_shown():
@@ -479,7 +525,7 @@ def test_a_non_record_is_not_created_or_shown():
     with pytest.raises(AttributeError):
         session.create(object())
     with pytest.raises(AttributeError):
-        session.show({'name': 'Sales by Region'})
+        session.show({'name': 'Sales by Region'}, 8, 4)
 
 # ** test: session_does_not_import_the_drawing_tool_or_a_store
 def test_session_does_not_import_the_drawing_tool_or_a_store():
@@ -1100,8 +1146,8 @@ def test_show_does_not_read_or_drop_an_open_draft():
     })
     session = bound(show=show_handler(get_dependency))
     session.draft('Draft Name', 'line')
-    assert session.show(explicit) == b'plot-png'
-    assert renderer.calls == [('render', explicit)]
+    assert session.show(explicit, 8, 4) == b'plot-png'
+    assert renderer.calls == [('render', explicit, 8, 4)]
     assert calls == [(RENDERER_SERVICE_ID, (PLOT_FLAG,))]
     with pytest.raises(ValueError):
         session.draft('Other', 'line')
