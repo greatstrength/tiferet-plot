@@ -57,6 +57,12 @@ class CreatePlot(PlotEvent):
             series: list,
             id: str | None = None,
             description: str | None = None,
+            *,
+            title: str | None = None,
+            x_title: str | None = None,
+            x_unit: str | None = None,
+            y_title: str | None = None,
+            y_unit: str | None = None,
             **kwargs,
         ) -> PlotAggregate:
         '''
@@ -64,7 +70,7 @@ class CreatePlot(PlotEvent):
 
         A missing id is the snake_case of the name. A supplied id is kept.
         Kind and marks are checked by that declaration. An id already kept
-        fails before save.
+        fails before save. Title and axis text are not identity.
 
         :param name: The author's name for the plot.
         :type name: str
@@ -76,6 +82,16 @@ class CreatePlot(PlotEvent):
         :type id: str | None
         :param description: Optional claim text. Not used to derive the id.
         :type description: str | None
+        :param title: Optional display title. Not used to derive the id.
+        :type title: str | None
+        :param x_title: Optional title of the x axis. Not used to derive the id.
+        :type x_title: str | None
+        :param x_unit: Optional unit of the x axis. Not used to derive the id.
+        :type x_unit: str | None
+        :param y_title: Optional title of the y axis. Not used to derive the id.
+        :type y_title: str | None
+        :param y_unit: Optional unit of the y axis. Not used to derive the id.
+        :type y_unit: str | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The kept plot record.
@@ -90,6 +106,11 @@ class CreatePlot(PlotEvent):
             series=series,
             id=id,
             description=description,
+            title=title,
+            x_title=x_title,
+            x_unit=x_unit,
+            y_title=y_title,
+            y_unit=y_unit,
         )
 
         # An id already kept is the rejected second save. Do not call save.
@@ -184,14 +205,21 @@ class UpdatePlot(PlotEvent):
             kind: str,
             series: list,
             description: str | None = None,
+            *,
+            title: str | None = None,
+            x_title: str | None = None,
+            x_unit: str | None = None,
+            y_title: str | None = None,
+            y_unit: str | None = None,
             **kwargs,
         ) -> PlotAggregate:
         '''
         Replace a kept plot without changing its id.
 
         Kind and marks are checked again. An omitted description is no
-        description, not a merge with the kept record. The id is the one
-        the caller already kept.
+        description, not a merge with the kept record. An omitted title
+        or axis field is absent, not a merge. The id is the one the
+        caller already kept.
 
         :param id: The kept plot id. Not derived from the name.
         :type id: str
@@ -203,6 +231,16 @@ class UpdatePlot(PlotEvent):
         :type series: list
         :param description: The replacement claim text, if any.
         :type description: str | None
+        :param title: The replacement display title, if any. Not identity.
+        :type title: str | None
+        :param x_title: The replacement x-axis title, if any.
+        :type x_title: str | None
+        :param x_unit: The replacement x-axis unit, if any.
+        :type x_unit: str | None
+        :param y_title: The replacement y-axis title, if any.
+        :type y_title: str | None
+        :param y_unit: The replacement y-axis unit, if any.
+        :type y_unit: str | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The replacement record.
@@ -217,6 +255,11 @@ class UpdatePlot(PlotEvent):
             kind=kind,
             series=series,
             description=description,
+            title=title,
+            x_title=x_title,
+            x_unit=x_unit,
+            y_title=y_title,
+            y_unit=y_unit,
         )
 
         # Replace the kept record. A missing id fails and does not insert.
@@ -295,6 +338,8 @@ class CreateMatrix(MatrixEvent):
             cells: list,
             id: str | None = None,
             description: str | None = None,
+            *,
+            title: str | None = None,
             **kwargs,
         ) -> PlotMatrixAggregate:
         '''
@@ -302,6 +347,7 @@ class CreateMatrix(MatrixEvent):
 
         An id already kept fails before save and leaves the first matrix
         unchanged. Save failing because the id exists is that same failure.
+        Title is not identity. A matrix has no axis text.
 
         :param name: The author's name for the matrix.
         :type name: str
@@ -315,6 +361,8 @@ class CreateMatrix(MatrixEvent):
         :type id: str | None
         :param description: Optional claim text. Not identity.
         :type description: str | None
+        :param title: Optional display title of the grid. Not used to derive the id.
+        :type title: str | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The kept matrix.
@@ -329,6 +377,7 @@ class CreateMatrix(MatrixEvent):
             cells=cells,
             id=id,
             description=description,
+            title=title,
         )
 
         # An id already kept is the same failure as a rejected save.
@@ -421,10 +470,15 @@ class UpdateMatrix(MatrixEvent):
             cols: int,
             cells: list,
             description: str | None = None,
+            *,
+            title: str | None = None,
             **kwargs,
         ) -> PlotMatrixAggregate:
         '''
         Re-declare a kept matrix and replace it.
+
+        An omitted title is no title, not a merge with the kept record.
+        The id is not derived from the title.
 
         :param id: The matrix id already kept. Not recomputed from the name.
         :type id: str
@@ -438,6 +492,8 @@ class UpdateMatrix(MatrixEvent):
         :type cells: list
         :param description: Optional claim text. Not identity.
         :type description: str | None
+        :param title: The replacement display title, if any. Not identity.
+        :type title: str | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The replacement matrix.
@@ -452,6 +508,7 @@ class UpdateMatrix(MatrixEvent):
             cols=cols,
             cells=cells,
             description=description,
+            title=title,
         )
 
         # A missing id fails before update and does not insert.

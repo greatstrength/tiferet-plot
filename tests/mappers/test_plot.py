@@ -230,3 +230,32 @@ def test_matrix_file_shape_keeps_the_plot_id_and_drops_the_matrix_id():
     assert loaded.cells[0].plot.id == 'revenue_plot'
     assert loaded.cells[0].plot.kind == 'line'
     assert loaded.cells[0].plot.series[0].marks[0].values == (1, 2)
+
+# ** test: rename_does_not_rewrite_a_supplied_title
+def test_rename_does_not_rewrite_a_supplied_title():
+    '''
+    Renaming a plot does not change its id and does not rewrite title.
+    '''
+
+    # The title is a different string from the catalog name.
+    plot = PlotAggregate(
+        name='Sales by Region',
+        title='Quarterly sales, 2024',
+        kind='line',
+        series=[
+            SeriesAggregate(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert plot.id == 'sales_by_region'
+
+    # Rename changes the name only.
+    plot.rename('Quarterly Sales')
+    assert plot.id == 'sales_by_region'
+    assert plot.name == 'Quarterly Sales'
+    assert plot.title == 'Quarterly sales, 2024'
+    assert plot.title_text == 'Quarterly sales, 2024'
+
+    # Changing the title does not recompute the id.
+    plot.title = 'A different sentence'
+    assert plot.id == 'sales_by_region'
+    assert plot.title_text == 'A different sentence'

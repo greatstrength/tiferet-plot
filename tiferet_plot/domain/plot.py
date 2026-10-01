@@ -76,6 +76,72 @@ def _is_blank(value: Any) -> bool:
     # Any other value was supplied and must be kept.
     return False
 
+# ** function: _absent_text
+def _absent_text(value: Any) -> Any:
+    '''
+    Store omitted and blank figure text as absent.
+
+    An empty string and a whitespace-only string are the same case as
+    an omitted field. A supplied string is kept as given. This does
+    not fill the text from the name.
+
+    :param value: The raw text.
+    :type value: Any
+    :return: None when the text was omitted or blank, otherwise the value.
+    :rtype: Any
+    '''
+
+    # Blank text is no text. Do not store an empty string.
+    if _is_blank(value):
+        return None
+
+    # A supplied string is kept. It is not rewritten from the name.
+    return value
+
+# ** function: _title_text
+def _title_text(title: Any, name: str) -> str:
+    '''
+    Return the title text a later drawer reads.
+
+    The reading is ``title`` when that field is present and not blank,
+    otherwise the catalog name. It is not stored back into ``title``.
+
+    :param title: The display title, if any.
+    :type title: Any
+    :param name: The catalog name.
+    :type name: str
+    :return: The title text a later drawer reads.
+    :rtype: str
+    '''
+
+    # Absent title is not filled from the name in the record.
+    if _is_blank(title):
+        return name
+
+    # A present title is the text. The name is not the display title.
+    return title
+
+# ** function: _subtitle_text
+def _subtitle_text(description: Any) -> str | None:
+    '''
+    Return the subtitle text a later drawer reads.
+
+    The subtitle is ``description`` when that field is present and not
+    blank. There is no subtitle field. This does not rewrite description.
+
+    :param description: The claim text, if any.
+    :type description: Any
+    :return: The subtitle text, or None when there is none to read.
+    :rtype: str | None
+    '''
+
+    # A blank description is no subtitle for the later drawer.
+    if _is_blank(description):
+        return None
+
+    # The stored sentence is the subtitle. It is not copied to another field.
+    return description
+
 # ** function: _snake_case
 def _snake_case(name: str) -> str:
     '''
@@ -354,8 +420,8 @@ class Series(DomainObject):
     '''
     A series binds one named set of data to the marks a kind requires.
 
-    It is part of the plot record. It is not a drawing instruction, and it
-    has no description in this round.
+    It is part of the plot record. It is not a drawing instruction. It
+    has no description, no title, and no axis text.
     '''
 
     # * attribute: id
@@ -398,7 +464,8 @@ class Plot(DomainObject):
     A plot is a declared record of a claim, not a picture.
 
     It names the figure, the kind of chart, and the series that carry the
-    marks. It does not know which tool will draw it or where it will be kept.
+    marks. The catalog name is not the display title. It does not know
+    which tool will draw it or where it will be kept.
     '''
 
     # * attribute: id
@@ -422,7 +489,37 @@ class Plot(DomainObject):
     # * attribute: description
     description: str | None = Field(
         default=None,
-        description='Optional claim text. Not used to derive id or kind.',
+        description='Optional claim text, read later as the subtitle. Not used to derive id or kind.',
+    )
+
+    # * attribute: title
+    title: str | None = Field(
+        default=None,
+        description='Optional display title. Not the catalog name, and not used to derive id.',
+    )
+
+    # * attribute: x_title
+    x_title: str | None = Field(
+        default=None,
+        description='Optional title of the x axis. Not a mark role, and not used to derive id.',
+    )
+
+    # * attribute: x_unit
+    x_unit: str | None = Field(
+        default=None,
+        description='Optional unit of the x axis. Not written into the axis title.',
+    )
+
+    # * attribute: y_title
+    y_title: str | None = Field(
+        default=None,
+        description='Optional title of the y axis. Not a mark role, and not used to derive id.',
+    )
+
+    # * attribute: y_unit
+    y_unit: str | None = Field(
+        default=None,
+        description='Optional unit of the y axis. Not written into the axis title.',
     )
 
     # * attribute: series
@@ -447,6 +544,38 @@ class Plot(DomainObject):
 
         # A plot is the record with a kind. It is not a grid.
         return False
+
+    # * method: title_text (property)
+    @property
+    def title_text(self) -> str:
+        '''
+        Return the title text a later drawer reads.
+
+        The reading is ``title`` when it is present and not blank,
+        otherwise the catalog name. The reading is not stored.
+
+        :return: The title text a later drawer reads.
+        :rtype: str
+        '''
+
+        # Do not copy the name into title. The drawer reads one or the other.
+        return _title_text(self.title, self.name)
+
+    # * method: subtitle_text (property)
+    @property
+    def subtitle_text(self) -> str | None:
+        '''
+        Return the subtitle text a later drawer reads.
+
+        The subtitle is ``description`` when it is present and not blank.
+        There is no subtitle field. A blank description is no subtitle.
+
+        :return: The subtitle text, or None when there is none to read.
+        :rtype: str | None
+        '''
+
+        # Description stays as stored. Blank text is not a subtitle.
+        return _subtitle_text(self.description)
 
     # * method: require_kind (static)
     @staticmethod
@@ -506,6 +635,25 @@ class Plot(DomainObject):
 
         # The plot describes a legal kind. Do not restate that rule here.
         return cls.require_kind(value)
+
+    # * method: _normalize_figure_text (field validator)
+    @field_validator('title', 'x_title', 'x_unit', 'y_title', 'y_unit')
+    @classmethod
+    def _normalize_figure_text(cls, value: str | None) -> str | None:
+        '''
+        Store omitted and blank figure text as absent.
+
+        Declaration does not fill ``title`` from the name, and it does
+        not write a unit into a title.
+
+        :param value: The supplied text.
+        :type value: str | None
+        :return: None when the text was omitted or blank, otherwise the string.
+        :rtype: str | None
+        '''
+
+        # Blank and omitted are the same case. Do not store an empty string.
+        return _absent_text(value)
 
     # * method: _validate_declaration (model validator)
     @model_validator(mode='after')
@@ -584,8 +732,9 @@ class PlotMatrix(DomainObject):
     '''
     A plot matrix is a declared grid of plots, not a fourth chart kind.
 
-    It names which plots occupy which row and column. The picture of that
-    grid is not part of the record, and neither is the tool that draws it.
+    It names which plots occupy which row and column. Its display title
+    is not a cell's title. The picture of that grid is not part of the
+    record, and neither is the tool that draws it.
     '''
 
     # * attribute: id
@@ -603,7 +752,13 @@ class PlotMatrix(DomainObject):
     # * attribute: description
     description: str | None = Field(
         default=None,
-        description='Optional claim text. Not used to derive the id.',
+        description='Optional claim text, read later as the grid subtitle. Not used to derive the id.',
+    )
+
+    # * attribute: title
+    title: str | None = Field(
+        default=None,
+        description='Optional display title of the grid. Not a cell title, and not used to derive id.',
     )
 
     # * attribute: rows
@@ -642,6 +797,56 @@ class PlotMatrix(DomainObject):
 
         # A matrix is its own record. Kind does not describe it.
         return True
+
+    # * method: title_text (property)
+    @property
+    def title_text(self) -> str:
+        '''
+        Return the grid title text a later drawer reads.
+
+        The reading is the matrix ``title`` when it is present and not
+        blank, otherwise the matrix name. A cell title is not this text.
+
+        :return: The grid title text a later drawer reads.
+        :rtype: str
+        '''
+
+        # Do not copy the name into title. A cell title is not the grid title.
+        return _title_text(self.title, self.name)
+
+    # * method: subtitle_text (property)
+    @property
+    def subtitle_text(self) -> str | None:
+        '''
+        Return the grid subtitle a later drawer reads.
+
+        The subtitle is the matrix ``description`` when it is present
+        and not blank. A cell description is not this text.
+
+        :return: The grid subtitle, or None when there is none to read.
+        :rtype: str | None
+        '''
+
+        # Description stays as stored. Blank text is not a subtitle.
+        return _subtitle_text(self.description)
+
+    # * method: _normalize_title (field validator)
+    @field_validator('title')
+    @classmethod
+    def _normalize_title(cls, value: str | None) -> str | None:
+        '''
+        Store an omitted or blank grid title as absent.
+
+        Declaration does not fill ``title`` from the name.
+
+        :param value: The supplied title.
+        :type value: str | None
+        :return: None when the title was omitted or blank, otherwise the string.
+        :rtype: str | None
+        '''
+
+        # Blank and omitted are the same case. Do not store an empty string.
+        return _absent_text(value)
 
     # * method: _derive_id (model validator)
     @model_validator(mode='before')

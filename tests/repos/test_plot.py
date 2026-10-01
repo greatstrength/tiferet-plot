@@ -795,3 +795,216 @@ def test_matrix_repository_is_not_exported():
     assert 'MatrixConfigRepository' not in tiferet_plot.__all__
     assert not hasattr(tiferet_plot, 'MatrixConfigRepository')
     assert not hasattr(repos_package, 'MatrixConfigRepository')
+
+# ** test: save_writes_figure_text_on_the_plot_body
+def test_save_writes_figure_text_on_the_plot_body(tmp_path):
+    '''
+    Title and axis text are stored on the plot body, not on a series.
+    '''
+
+    # Keep a plot that names its display title and its axes.
+    repo, path = open_repo(tmp_path, '.yml')
+    plot = PlotAggregate(
+        name='Sales by Region',
+        kind='line',
+        title='Quarterly sales, 2024',
+        x_title='Year',
+        y_title='Revenue',
+        y_unit='USD',
+        series=[
+            SeriesAggregate(name='Revenue', marks=line_marks()),
+            SeriesAggregate(name='Cost', marks=line_marks((5, 6), (7, 8))),
+        ],
+    )
+    repo.save(plot)
+
+    # The id is the key. The strings are on the plot, not on a series.
+    body = repo._load()['plots']['sales_by_region']
+    assert 'id' not in body
+    assert body['title'] == 'Quarterly sales, 2024'
+    assert body['x_title'] == 'Year'
+    assert body['y_title'] == 'Revenue'
+    assert body['y_unit'] == 'USD'
+    assert 'x_unit' not in body
+    for series in body['series']:
+        assert 'title' not in series
+        assert 'x_title' not in series
+        assert 'y_unit' not in series
+
+    # Loading returns the same strings.
+    loaded = repo.get('sales_by_region')
+    assert loaded.title == 'Quarterly sales, 2024'
+    assert loaded.x_title == 'Year'
+    assert loaded.x_unit is None
+    assert loaded.y_title == 'Revenue'
+    assert loaded.y_unit == 'USD'
+
+    # A second save of that id fails, and the first record is unchanged.
+    before = path.read_bytes()
+    with pytest.raises(ServiceError) as caught:
+        repo.save(PlotAggregate(
+            id=plot.id,
+            name='A different title',
+            kind='scatter',
+            title='Not the first title',
+            series=[
+                SeriesAggregate(name='Other', marks=line_marks()),
+            ],
+        ))
+    assert caught.value.error_code == PLOT_ALREADY_KEPT_ID
+    assert path.read_bytes() == before
+    assert repo.get(plot.id).title == 'Quarterly sales, 2024'
+
+# ** test: a_b1_body_omits_absent_figure_text
+def test_a_b1_body_omits_absent_figure_text(tmp_path):
+    '''
+    A body with no title and no axis keys loads those fields as absent.
+    '''
+
+    # The b1 shape has no title key and no axis keys.
+    path = tmp_path / 'publication.yml'
+    path.write_text(SEEDED_PLOT_YAML, encoding='utf-8')
+    repo = PlotConfigRepository(str(path))
+    loaded = repo.get('sales_by_region')
+    body = repo._load()['plots']['sales_by_region']
+
+    # Absent text is not an empty key, and it is not filled from the name.
+    assert loaded.title is None
+    assert loaded.x_title is None
+    assert loaded.x_unit is None
+    assert loaded.y_title is None
+    assert loaded.y_unit is None
+    assert loaded.name == 'Sales by Region'
+    for key in ('title', 'x_title', 'x_unit', 'y_title', 'y_unit'):
+        assert key not in body
+
+    # Saving a plot with blank text still omits the keys.
+    blank = PlotAggregate(
+        id='Custom-Id',
+        name='Sales by Region',
+        kind='line',
+        title='   ',
+        x_title='',
+        y_unit='  ',
+        series=[
+            SeriesAggregate(name='Revenue', marks=line_marks()),
+        ],
+    )
+    repo.save(blank)
+    saved = repo._load()['plots']['Custom-Id']
+    assert 'title' not in saved
+    assert 'x_title' not in saved
+    assert 'y_unit' not in saved
+    assert repo.get('Custom-Id').title is None
+    assert repo.get('Custom-Id').name == 'Sales by Region'
+
+# ** test: update_clears_an_omitted_title
+def test_update_clears_an_omitted_title(tmp_path):
+    '''
+    Update can change title or a unit. Omitting either clears the stored key.
+    '''
+
+    # Keep the strings, then replace the title and the unit.
+    repo, _path = open_repo(tmp_path, '.json')
+    plot = PlotAggregate(
+        id='Custom-Id',
+        name='Sales by Region',
+        kind='line',
+        title='Quarterly sales, 2024',
+        y_unit='USD',
+        series=[
+            SeriesAggregate(name='Revenue', marks=line_marks()),
+        ],
+    )
+    repo.save(plot)
+    plot.title = 'A later title'
+    plot.y_unit = 'EUR'
+    repo.update(plot)
+    assert repo.get('Custom-Id').id == 'Custom-Id'
+    assert repo.get('Custom-Id').title == 'A later title'
+    assert repo.get('Custom-Id').y_unit == 'EUR'
+
+    # An update that omits title and y_unit does not keep the previous values.
+    cleared = PlotAggregate(
+        id='Custom-Id',
+        name='Quarterly Sales',
+        kind='line',
+        series=[
+            SeriesAggregate(id='revenue', name='Revenue', marks=line_marks()),
+        ],
+    )
+    repo.update(cleared)
+    loaded = repo.get('Custom-Id')
+    body = repo._load()['plots']['Custom-Id']
+    assert loaded.id == 'Custom-Id'
+    assert loaded.name == 'Quarterly Sales'
+    assert loaded.title is None
+    assert loaded.y_unit is None
+    assert 'title' not in body
+    assert 'y_unit' not in body
+    assert repo.get('quarterly_sales') is None
+
+# ** test: matrix_save_keeps_title_off_the_axis_keys
+def test_matrix_save_keeps_title_off_the_axis_keys(tmp_path):
+    '''
+    A matrix title is on the matrix body. Axis text stays on the cell plot.
+    '''
+
+    # The matrix has a title. The cell plot has its own title and axis text.
+    path = tmp_path / 'publication.yml'
+    repo = MatrixConfigRepository(str(path))
+    matrix = PlotMatrixAggregate(
+        name='Sales by Region',
+        title='Quarterly sales by region',
+        rows=1,
+        cols=1,
+        cells=[
+            {
+                'row': 0,
+                'col': 0,
+                'plot': {
+                    'id': 'revenue_plot',
+                    'name': 'Revenue',
+                    'title': 'Cell title',
+                    'x_title': 'Year',
+                    'kind': 'line',
+                    'series': [
+                        {
+                            'id': 'rev-1',
+                            'name': 'Revenue',
+                            'marks': line_marks(),
+                        },
+                    ],
+                },
+            },
+        ],
+    )
+    repo.save(matrix)
+    body = repo._load()['matrices']['sales_by_region']
+
+    # The grid title is the matrix title. Axis text is not a matrix key.
+    assert body['title'] == 'Quarterly sales by region'
+    assert 'x_title' not in body
+    assert body['cells'][0]['plot']['title'] == 'Cell title'
+    assert body['cells'][0]['plot']['x_title'] == 'Year'
+    loaded = repo.get('sales_by_region')
+    assert loaded.title == 'Quarterly sales by region'
+    assert loaded.name == 'Sales by Region'
+    assert loaded.cells[0].plot.title == 'Cell title'
+    assert loaded.cells[0].plot.x_title == 'Year'
+    assert loaded.title_text == 'Quarterly sales by region'
+
+    # A matrix with no title does not write the name into title.
+    unnamed = PlotMatrixAggregate(
+        id='Custom-Id',
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=matrix.cells,
+    )
+    repo.save(unnamed)
+    unnamed_body = repo._load()['matrices']['Custom-Id']
+    assert 'title' not in unnamed_body
+    assert 'x_title' not in unnamed_body
+    assert repo.get('Custom-Id').title is None
+    assert repo.get('Custom-Id').title_text == 'Sales by Region'

@@ -130,6 +130,7 @@ def create_handler(get_dependency: Callable) -> Callable:
                 cells=record.cells,
                 id=record.id,
                 description=record.description,
+                title=record.title,
             )
 
         # A line and a bar share this event. Kind is an argument, not a method.
@@ -140,6 +141,11 @@ def create_handler(get_dependency: Callable) -> Callable:
             series=record.series,
             id=record.id,
             description=record.description,
+            title=record.title,
+            x_title=record.x_title,
+            x_unit=record.x_unit,
+            y_title=record.y_title,
+            y_unit=record.y_unit,
         )
 
     # Return the closure.
@@ -249,9 +255,17 @@ def _declare_plot(plot_id: str,
         name: str,
         kind: str,
         description: Any,
-        series: List[Series]) -> Plot:
+        series: List[Series],
+        title: Any = None,
+        x_title: Any = None,
+        x_unit: Any = None,
+        y_title: Any = None,
+        y_unit: Any = None) -> Plot:
     '''
     Declare the in-memory record again, passing settled ids through.
+
+    Title and axis text are passed through. They are not used to derive
+    the id, and a later series does not clear them.
 
     :param plot_id: The plot id already settled. Not derived again.
     :type plot_id: str
@@ -263,6 +277,16 @@ def _declare_plot(plot_id: str,
     :type description: Any
     :param series: The series, each with its id already settled.
     :type series: List[Series]
+    :param title: The optional display title. Not used to derive the id.
+    :type title: Any
+    :param x_title: The optional x-axis title.
+    :type x_title: Any
+    :param x_unit: The optional x-axis unit.
+    :type x_unit: Any
+    :param y_title: The optional y-axis title.
+    :type y_title: Any
+    :param y_unit: The optional y-axis unit.
+    :type y_unit: Any
     :return: The declared plot.
     :rtype: Plot
     '''
@@ -274,6 +298,11 @@ def _declare_plot(plot_id: str,
         kind=kind,
         description=description,
         series=series,
+        title=title,
+        x_title=x_title,
+        x_unit=x_unit,
+        y_title=y_title,
+        y_unit=y_unit,
     )
 
 # ** function: _own_plot
@@ -304,6 +333,11 @@ def _own_plot(plot: Any) -> Plot:
             _copy_series(item)
             for item in plot.series
         ],
+        title=plot.title,
+        x_title=plot.x_title,
+        x_unit=plot.x_unit,
+        y_title=plot.y_title,
+        y_unit=plot.y_unit,
     )
 
 # ** function: _extended_marks
@@ -453,12 +487,19 @@ class PlotterSessionContext(AppSessionContext):
             name: str,
             kind: str,
             id: str = None,
-            description: str = None) -> 'PlotterSessionContext':
+            description: str = None,
+            *,
+            title: str = None,
+            x_title: str = None,
+            x_unit: str = None,
+            y_title: str = None,
+            y_unit: str = None) -> 'PlotterSessionContext':
         '''
         Open one in-memory plot with no series.
 
         A missing or blank id is derived once from the name. A supplied
-        id is kept. An empty derivation opens nothing.
+        id is kept. An empty derivation opens nothing. Title is a keyword
+        and does not shift the id argument.
 
         :param name: The author's name for the plot.
         :type name: str
@@ -468,6 +509,16 @@ class PlotterSessionContext(AppSessionContext):
         :type id: str
         :param description: Optional claim text. Not used to derive the id.
         :type description: str
+        :param title: Optional display title. Not used to derive the id.
+        :type title: str
+        :param x_title: Optional title of the x axis.
+        :type x_title: str
+        :param x_unit: Optional unit of the x axis.
+        :type x_unit: str
+        :param y_title: Optional title of the y axis.
+        :type y_title: str
+        :param y_unit: Optional unit of the y axis.
+        :type y_unit: str
         :return: This session, for further chaining.
         :rtype: PlotterSessionContext
         '''
@@ -483,6 +534,11 @@ class PlotterSessionContext(AppSessionContext):
             'name': name,
             'kind': settled_kind,
             'description': description,
+            'title': title,
+            'x_title': x_title,
+            'x_unit': x_unit,
+            'y_title': y_title,
+            'y_unit': y_unit,
             'series': [],
             'record': None,
         }
@@ -515,6 +571,11 @@ class PlotterSessionContext(AppSessionContext):
             'name': record.name,
             'kind': record.kind,
             'description': record.description,
+            'title': record.title,
+            'x_title': record.x_title,
+            'x_unit': record.x_unit,
+            'y_title': record.y_title,
+            'y_unit': record.y_unit,
             'series': list(record.series),
             'record': record,
         }
@@ -568,6 +629,11 @@ class PlotterSessionContext(AppSessionContext):
             self._open['kind'],
             self._open['description'],
             series,
+            title=self._open['title'],
+            x_title=self._open['x_title'],
+            x_unit=self._open['x_unit'],
+            y_title=self._open['y_title'],
+            y_unit=self._open['y_unit'],
         )
 
         # A failed declaration does not reach here. The series list stays.
@@ -619,6 +685,11 @@ class PlotterSessionContext(AppSessionContext):
             [
                 addition,
             ],
+            title=self._open['title'],
+            x_title=self._open['x_title'],
+            x_unit=self._open['x_unit'],
+            y_title=self._open['y_title'],
+            y_unit=self._open['y_unit'],
         )
 
         # Rebuild every series. Only the addressed series gains values.
@@ -637,6 +708,11 @@ class PlotterSessionContext(AppSessionContext):
             self._open['kind'],
             self._open['description'],
             rebuilt,
+            title=self._open['title'],
+            x_title=self._open['x_title'],
+            x_unit=self._open['x_unit'],
+            y_title=self._open['y_title'],
+            y_unit=self._open['y_unit'],
         )
 
         # A failed declaration does not reach here. Ids stay as settled.
@@ -731,6 +807,11 @@ class PlotterSessionContext(AppSessionContext):
             kind=plot.kind,
             series=plot.series,
             description=plot.description,
+            title=plot.title,
+            x_title=plot.x_title,
+            x_unit=plot.x_unit,
+            y_title=plot.y_title,
+            y_unit=plot.y_unit,
         )
 
         # Success drops the in-memory plot. A failure does not reach here.

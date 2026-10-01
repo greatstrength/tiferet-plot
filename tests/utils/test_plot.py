@@ -597,3 +597,56 @@ def test_no_event_imports_the_utility_or_returns_png():
         assert 'matplotlib' not in imported
         assert 'MatplotlibRenderer' not in source
         assert 'png' not in source.lower()
+
+# ** test: render_does_not_read_figure_text
+def test_render_does_not_read_figure_text():
+    '''
+    render and render_matrix do not read name, title, description, or axis text.
+    '''
+
+    # The methods still take only the record. They do not name the new fields.
+    render_source = inspect.getsource(MatplotlibRenderer.render)
+    matrix_source = inspect.getsource(MatplotlibRenderer.render_matrix)
+    for source in (render_source, matrix_source):
+        for name in (
+            'title',
+            'description',
+            'x_title',
+            'x_unit',
+            'y_title',
+            'y_unit',
+            '.name',
+        ):
+            assert name not in source
+
+    # Two records that differ only in that text draw the same marks.
+    plain = line_plot()
+    titled = Plot(
+        name='Other Name',
+        title='Quarterly sales, 2024',
+        description='A subtitle.',
+        x_title='Year',
+        x_unit='yr',
+        y_title='Revenue',
+        y_unit='USD',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    renderer = MatplotlibRenderer()
+    assert image_data(renderer.render(plain)) == image_data(renderer.render(titled))
+
+    # A matrix title does not change the pasted cell picture.
+    grid = occupied_matrix([plain])
+    titled_grid = PlotMatrix(
+        name='Other Name',
+        title='Quarterly sales by region',
+        description='A grid subtitle.',
+        rows=2,
+        cols=2,
+        cells=grid.cells,
+    )
+    assert image_data(renderer.render_matrix(grid)) == image_data(
+        renderer.render_matrix(titled_grid),
+    )
