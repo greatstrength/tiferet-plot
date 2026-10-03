@@ -11,7 +11,11 @@ import pytest
 from pydantic import ValidationError
 
 # ** app
+from tiferet.domain import ModelError
 from tiferet_plot.domain.plot import (
+    ADDITION_ROLE_MISSING_ID,
+    ADDITION_ROLE_NOT_IN_SERIES_ID,
+    ADDITION_SORT_MISMATCH_ID,
     Mark,
     MatrixCell,
     Plot,
@@ -1327,3 +1331,58 @@ def test_cell_plot_with_text_x_requires_a_supplied_id():
     assert matrix.cells[0].plot.id != 'alpha'
     assert matrix.cells[0].plot.id != 'design_response'
     assert matrix.cells[0].plot.series[0].marks[0].values == ('alpha', 'beta')
+
+# ** test: a_series_describes_a_matching_addition
+def test_a_series_describes_a_matching_addition():
+    '''
+    An addition with the same roles and sorts is accepted, and nothing changes.
+    '''
+
+    # The series describes the addition. It does not take its values.
+    series = Series(name='Trial', marks=design_marks())
+    addition = Series(
+        name='Trial',
+        marks=design_marks(x=('gamma',), y=(3,), label=('run-3',)),
+    )
+    before = series.model_dump()
+    assert series.verify_addition(addition) is None
+
+    # Neither series was mutated by the description.
+    assert series.model_dump() == before
+    assert [mark.role for mark in series.marks] == ['x', 'y', 'label']
+    assert series.marks[0].values == ('alpha', 'beta')
+    assert addition.marks[0].values == ('gamma',)
+
+# ** test: a_series_names_an_addition_defect
+@pytest.mark.parametrize('marks,error_code', [
+    (
+        design_marks(x=('gamma',), y=(3,), label=None),
+        ADDITION_ROLE_MISSING_ID,
+    ),
+    (
+        design_marks(x=('gamma',), y=(3,)) + [
+            Mark(role='category', values=('East',)),
+        ],
+        ADDITION_ROLE_NOT_IN_SERIES_ID,
+    ),
+    (
+        design_marks(x=(9,), y=(3,), label=('run-3',)),
+        ADDITION_SORT_MISMATCH_ID,
+    ),
+])
+def test_a_series_names_an_addition_defect(marks, error_code):
+    '''
+    A missing role, an unknown role, or the other sort is a model defect.
+    '''
+
+    # The defect is named by the domain, not by a validation error.
+    series = Series(name='Trial', marks=design_marks())
+    before = series.model_dump()
+    with pytest.raises(ModelError) as caught:
+        series.verify_addition(Series(name='Trial', marks=marks))
+
+    # The error names the code and the offending series. The marks stayed.
+    assert caught.value.error_code == error_code
+    assert caught.value.model['type'] == 'Series'
+    assert caught.value.model['id'] == 'trial'
+    assert series.model_dump() == before

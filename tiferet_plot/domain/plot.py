@@ -11,6 +11,7 @@ from pydantic import Field, field_validator, model_validator
 
 # ** app
 from tiferet import DomainObject
+from tiferet.domain import ModelError
 
 # *** constants
 
@@ -63,6 +64,33 @@ TEXT_MARK_ROLES = (
 AXIS_MARK_ROLES = (
     'x',
     'y',
+)
+
+# *** constants (error)
+
+# ** constant: addition_role_not_in_series_id
+ADDITION_ROLE_NOT_IN_SERIES_ID = 'ADDITION_ROLE_NOT_IN_SERIES'
+
+# ** constant: addition_role_not_in_series_message
+ADDITION_ROLE_NOT_IN_SERIES_MESSAGE = (
+    'The addition carries mark role {role}, which this series does not carry.'
+)
+
+# ** constant: addition_role_missing_id
+ADDITION_ROLE_MISSING_ID = 'ADDITION_ROLE_MISSING'
+
+# ** constant: addition_role_missing_message
+ADDITION_ROLE_MISSING_MESSAGE = (
+    'The addition omits mark role {role}, which this series carries.'
+)
+
+# ** constant: addition_sort_mismatch_id
+ADDITION_SORT_MISMATCH_ID = 'ADDITION_SORT_MISMATCH'
+
+# ** constant: addition_sort_mismatch_message
+ADDITION_SORT_MISMATCH_MESSAGE = (
+    'The addition plays mark role {role} as {addition_sort} values, '
+    'and this series plays it as {series_sort} values.'
 )
 
 # *** functions
@@ -304,52 +332,6 @@ def _role_sort(role: str, values: Sequence[Any]) -> str:
     # A role outside the closed list is not a sort this check names.
     raise ValueError(f'Mark role {role!r} is not a declared role.')
 
-# ** function: _addition_matches
-def _addition_matches(series: Series, addition: Series) -> None:
-    '''
-    Require an addition to carry the series' roles and sorts.
-
-    Label is required when the series has it, and is not a role the
-    addition may invent. A text axis rejects a numeric addition. This
-    does not change the marks.
-
-    :param series: The series being extended.
-    :type series: Series
-    :param addition: The values to add.
-    :type addition: Series
-    :return: None
-    :rtype: None
-    '''
-
-    # The addition carries these roles, not a fresh required pair.
-    series_roles = {mark.role for mark in series.marks}
-    extra = [
-        mark.role for mark in addition.marks
-        if mark.role not in series_roles
-    ]
-    missing = [
-        mark.role for mark in series.marks
-        if mark.role not in {mark.role for mark in addition.marks}
-    ]
-    if extra:
-        raise ValueError(
-            f'Addition includes mark role {extra[0]!r}.'
-        )
-    if missing:
-        raise ValueError(
-            f'Addition omits mark role {missing[0]!r}.'
-        )
-
-    # Sorts match this series. A legal sort on its own is not enough.
-    current = {mark.role: mark.values for mark in series.marks}
-    for mark in addition.marks:
-        if _role_sort(mark.role, mark.values) != _role_sort(
-                mark.role, current[mark.role]):
-            raise ValueError(
-                f'Addition sort for mark role {mark.role!r} '
-                'does not match the series.'
-            )
-
 # ** function: _validate_marks
 def _validate_marks(kind: str, marks: Sequence[Mark]) -> dict:
     '''
@@ -586,6 +568,70 @@ class Series(DomainObject):
         ...,
         description='The role-and-values marks this series carries.',
     )
+
+    # * method: verify_addition
+    def verify_addition(self, addition: Series) -> None:
+        '''
+        Describe another series as an addition to this one, and fail
+        when it is not one.
+
+        An addition carries exactly the roles this series carries,
+        including ``label`` when this series has it, and plays each of
+        them as the same sort. A legal series on its own is not an
+        addition to this series. Neither series is changed.
+
+        :param addition: The series whose values would extend this one.
+        :type addition: Series
+        :return: None
+        :rtype: None
+        :raises ModelError: ``ADDITION_ROLE_NOT_IN_SERIES`` for a role this
+            series does not carry, ``ADDITION_ROLE_MISSING`` for one it
+            carries that the addition omits, and ``ADDITION_SORT_MISMATCH``
+            when a shared role is played as the other sort.
+        '''
+
+        # The addition carries these roles, not a fresh required pair.
+        roles = [mark.role for mark in self.marks]
+        added_roles = [mark.role for mark in addition.marks]
+        extra = [role for role in added_roles if role not in roles]
+        if extra:
+            ModelError.raise_error(
+                ADDITION_ROLE_NOT_IN_SERIES_ID,
+                message=ADDITION_ROLE_NOT_IN_SERIES_MESSAGE.format(
+                    role=extra[0],
+                ),
+                model=self,
+                role=extra[0],
+            )
+
+        # A role this series carries is not optional in the addition.
+        missing = [role for role in roles if role not in added_roles]
+        if missing:
+            ModelError.raise_error(
+                ADDITION_ROLE_MISSING_ID,
+                message=ADDITION_ROLE_MISSING_MESSAGE.format(
+                    role=missing[0],
+                ),
+                model=self,
+                role=missing[0],
+            )
+
+        # Sorts match this series. A legal sort on its own is not enough.
+        values = {mark.role: mark.values for mark in self.marks}
+        for mark in addition.marks:
+            series_sort = _role_sort(mark.role, values[mark.role])
+            addition_sort = _role_sort(mark.role, mark.values)
+            if addition_sort != series_sort:
+                ModelError.raise_error(
+                    ADDITION_SORT_MISMATCH_ID,
+                    message=ADDITION_SORT_MISMATCH_MESSAGE.format(
+                        role=mark.role,
+                        addition_sort=addition_sort,
+                        series_sort=series_sort,
+                    ),
+                    model=self,
+                    role=mark.role,
+                )
 
     # * method: _derive_id (model validator)
     @model_validator(mode='before')

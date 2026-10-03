@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from tiferet import TiferetAPIError
 from tiferet.contexts.app import AppSession, AppSessionContext
 from tiferet.contexts.core import BaseContext
+from tiferet.domain import ModelError
 from tiferet.interfaces import ServiceError
 from tiferet_plot.contexts.plot import (
     CREATE_MATRIX_EVENT_ID,
@@ -28,6 +29,9 @@ from tiferet_plot.contexts.plot import (
 from tiferet_plot.events.plot import CreateMatrix, CreatePlot, UpdatePlot
 from tiferet_plot.interfaces.plot import MatrixService, PlotService
 from tiferet_plot.domain.plot import (
+    ADDITION_ROLE_MISSING_ID,
+    ADDITION_ROLE_NOT_IN_SERIES_ID,
+    ADDITION_SORT_MISMATCH_ID,
     Mark,
     MatrixCell,
     Plot,
@@ -702,7 +706,6 @@ def test_append_addresses_a_series_by_id():
     ('line', [{'role': 'x', 'values': ()}, {'role': 'y', 'values': ()}]),
     ('line', [Mark(role='x', values=(5,))]),
     ('line', line_marks(x=(5,), y=(6,)) + [Mark(role='category', values=('East',))]),
-    ('line', [Mark(role='x', values=(5,)), Mark(role='y', values=('6',))]),
     ('scatter', [Mark(role='x', values=(5,)), Mark(role='y', values=(6, 7))]),
     ('bar', [Mark(role='category', values=('East',)), Mark(role='height', values=(1, 2))]),
     ('line', bar_marks()),
@@ -1332,18 +1335,22 @@ def test_append_role_and_sort_mismatches_leave_the_marks_unchanged():
         Mark(role='label', values=('run-1', 'run-2')),
     ]
     session.add_series('Trial', labeled)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError) as omitted:
         session.append('trial', [
             Mark(role='x', values=('gamma',)),
             Mark(role='y', values=(3,)),
         ])
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError) as wrong_sort:
         session.append('trial', [
             Mark(role='x', values=(9,)),
             Mark(role='y', values=(3,)),
             Mark(role='label', values=('run-3',)),
         ])
     kept = session.create()
+
+    # The domain named the defect. The marks did not change.
+    assert omitted.value.error_code == ADDITION_ROLE_MISSING_ID
+    assert wrong_sort.value.error_code == ADDITION_SORT_MISMATCH_ID
     assert kept.id == 'design_response'
     assert kept.series[0].id == 'trial'
     assert mark_values(kept) == [
@@ -1356,11 +1363,18 @@ def test_append_role_and_sort_mismatches_leave_the_marks_unchanged():
     session = bound(create=lambda record: record)
     session.draft('Sales by Region', 'line')
     session.add_series('Revenue', line_marks())
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError) as added_label:
         session.append('revenue', line_marks(x=(5,), y=(6,)) + [
             Mark(role='label', values=('run-3',)),
         ])
+    with pytest.raises(ModelError) as text_y:
+        session.append('revenue', [
+            Mark(role='x', values=(5,)),
+            Mark(role='y', values=('6',)),
+        ])
     kept = session.create()
+    assert added_label.value.error_code == ADDITION_ROLE_NOT_IN_SERIES_ID
+    assert text_y.value.error_code == ADDITION_SORT_MISMATCH_ID
     assert kept.id == 'sales_by_region'
     assert kept.series[0].id == 'revenue'
     assert mark_values(kept) == [(1, 2), (3, 4)]

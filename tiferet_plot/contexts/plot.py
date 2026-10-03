@@ -5,9 +5,6 @@
 # ** core
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# ** infra
-from pydantic import ValidationError
-
 # ** app
 from tiferet.contexts.app import AppSessionContext, raise_unwired_handler_error
 from tiferet.contexts.cache import CacheContext
@@ -16,7 +13,6 @@ from ..domain.plot import (
     Mark,
     Plot,
     Series,
-    _addition_matches,
     _is_blank,
     _snake_case,
 )
@@ -335,36 +331,6 @@ def _extended_marks(series: Series, addition: Series) -> List[Mark]:
         )
         for mark in series.marks
     ]
-
-# ** function: _require_matching_addition
-def _require_matching_addition(series: Series, addition: Series) -> None:
-    '''
-    Fail unless the addition carries this series' roles and sorts.
-
-    The failure is the same validation error declaration raises. The
-    marks are not changed here.
-
-    :param series: The series being extended.
-    :type series: Series
-    :param addition: The values to add, already legal for the kind.
-    :type addition: Series
-    :return: None
-    :rtype: None
-    '''
-
-    # A mismatched role or sort is a declaration failure, not a new record.
-    try:
-        _addition_matches(series, addition)
-    except ValueError as error:
-        raise ValidationError.from_exception_data(
-            'Plot',
-            [{
-                'type': 'value_error',
-                'loc': ('series',),
-                'input': addition.marks,
-                'ctx': {'error': error},
-            }],
-        ) from error
 
 # *** contexts
 
@@ -694,8 +660,8 @@ class PlotterSessionContext(AppSessionContext):
             y_unit=self._open['y_unit'],
         )
 
-        # Roles and sorts must match this series, not merely be legal alone.
-        _require_matching_addition(current, addition)
+        # The series describes the addition. Its failure is a model defect.
+        current.verify_addition(addition)
 
         # Rebuild every series. Only the addressed series gains values.
         rebuilt = []
