@@ -151,42 +151,6 @@ def create_handler(get_dependency: Callable) -> Callable:
     # Return the closure.
     return handler
 
-# ** function: show_handler
-def show_handler(get_dependency: Callable) -> Callable:
-    '''
-    Build the show handler.
-
-    The handler resolves the renderer on the plot flag and returns the
-    picture bytes. It passes the caller's width and height through. It
-    does not store that pair, default it, or read it from the record.
-    It does not write a publication file. A line and a bar use the same
-    call.
-
-    :param get_dependency: The DI resolution handler.
-    :type get_dependency: Callable
-    :return: A handler that returns the picture bytes.
-    :rtype: Callable
-    '''
-
-    # Return the handler closure bound to the resolver.
-    def handler(record: Any, width: float, height: float) -> bytes:
-
-        # The record says whether it is a matrix. A non-record has no such description.
-        is_matrix = record.is_matrix
-
-        # The drawing tool is a service on the plot flag, not an import here.
-        renderer = get_dependency(RENDERER_SERVICE_ID, PLOT_FLAG)
-
-        # A matrix is one picture of the grid. The size is the caller's pair.
-        if is_matrix:
-            return renderer.render_matrix(record, width, height)
-
-        # Kind does not choose a different show. The size is not read from the record.
-        return renderer.render(record, width, height)
-
-    # Return the closure.
-    return handler
-
 # ** function: _settled_id
 def _settled_id(name: str, supplied: Any) -> str:
     '''

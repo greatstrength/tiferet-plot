@@ -13,7 +13,7 @@ import pytest
 from tiferet import TiferetError
 from tiferet.di import DIAppServiceContainer, DIDynamicServiceContainer
 from tiferet.interfaces import ServiceError
-from tiferet_plot.blueprints.plot import create_plotter_session
+from tiferet_plot.blueprints.plot import create_plotter_session, show_handler
 from tiferet_plot.contexts.plot import (
     PLOT_FLAG,
     RENDERER_SERVICE_ID,
@@ -50,7 +50,95 @@ PNG_SIGNATURE = bytes([
     0x0A,
 ])
 
+# *** classes
+
+# ** class: recording_renderer
+class RecordingRenderer:
+    '''
+    A renderer stand-in that records which picture method was called.
+    '''
+
+    # * init
+    def __init__(self) -> None:
+        '''
+        Start with no picture calls.
+        '''
+
+        # The method name proves plot and matrix do not share a drawing call.
+        self.calls = []
+
+    # * method: render
+    def render(self, plot, width, height) -> bytes:
+        '''
+        Record a plot picture call.
+
+        :param plot: The plot record.
+        :type plot: Any
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
+        :return: Sentinel picture bytes.
+        :rtype: bytes
+        '''
+
+        # Return bytes. Do not write a file or read a size from the plot.
+        self.calls.append(('render', plot, width, height))
+        return b'plot-png'
+
+    # * method: render_matrix
+    def render_matrix(self, matrix, width, height) -> bytes:
+        '''
+        Record a matrix picture call.
+
+        :param matrix: The matrix record.
+        :type matrix: Any
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
+        :return: Sentinel picture bytes.
+        :rtype: bytes
+        '''
+
+        # Return bytes. Do not write a file or invent a size per cell.
+        self.calls.append(('render_matrix', matrix, width, height))
+        return b'matrix-png'
+
 # *** functions
+
+# ** function: resolver
+def resolver(mapping):
+    '''
+    Build a get_dependency stand-in that records the flag.
+
+    :param mapping: Service id to instance.
+    :type mapping: dict
+    :return: The resolver and the recorded calls.
+    :rtype: tuple
+    '''
+
+    # The flag on the call is the proof. The instance is the dependency.
+    calls = []
+
+    def get_dependency(service_id, *flags):
+        '''
+        Record the resolution and return the mapped instance.
+
+        :param service_id: The service id.
+        :type service_id: str
+        :param flags: The DI flags.
+        :type flags: tuple
+        :return: The mapped instance.
+        :rtype: Any
+        '''
+
+        # Record the flag. Do not fall back to another namespace.
+        calls.append((service_id, flags))
+        return mapping[service_id]
+
+    # Return the resolver and the call log.
+    return get_dependency, calls
 
 # ** function: line_plot
 def line_plot(kind='line', plot_id='sales_by_region'):
@@ -128,6 +216,71 @@ def imported_modules(path: Path) -> list:
     return names
 
 # *** tests
+
+# ** test: show_handler_calls_render_or_render_matrix_on_the_plot_flag
+def test_show_handler_calls_render_or_render_matrix_on_the_plot_flag():
+    '''
+    The handler resolves the renderer on the plot flag and forwards the size.
+    '''
+
+    # The handler is composed here. It is not a function of the session module.
+    assert show_handler.__module__ == 'tiferet_plot.blueprints.plot'
+    plot = line_plot()
+    bar = line_plot(kind='bar', plot_id='sales_bar')
+    matrix = grid()
+    renderer = RecordingRenderer()
+    get_dependency, calls = resolver({
+        RENDERER_SERVICE_ID: renderer,
+    })
+    handler = show_handler(get_dependency)
+
+    # A line and a bar use the same render call, with the pair the caller named.
+    assert handler(plot, 8, 4) == b'plot-png'
+    assert handler(bar, 4, 8) == b'plot-png'
+    assert renderer.calls == [
+        ('render', plot, 8, 4),
+        ('render', bar, 4, 8),
+    ]
+    assert calls == [
+        (RENDERER_SERVICE_ID, (PLOT_FLAG,)),
+        (RENDERER_SERVICE_ID, (PLOT_FLAG,)),
+    ]
+    assert all(flag != ('app',) for _, flag in calls)
+
+    # A matrix is the other method. It is not a fourth kind.
+    assert handler(matrix, 8, 6) == b'matrix-png'
+    assert renderer.calls[-1] == ('render_matrix', matrix, 8, 6)
+    assert calls[-1] == (RENDERER_SERVICE_ID, (PLOT_FLAG,))
+
+    # The handler does not default the pair or read a size from the record.
+    with pytest.raises(TypeError):
+        handler(plot)
+    assert not hasattr(plot, 'width')
+
+# ** test: show_handler_does_not_invent_a_record
+def test_show_handler_does_not_invent_a_record():
+    '''
+    The handler rejects a non-record before it resolves the renderer.
+    '''
+
+    # Resolution must not run. The caller did not pass a finished record.
+    def get_dependency(*args, **kwargs):
+        '''
+        Fail if the handler resolves a service for a non-record.
+
+        :param args: Resolution arguments.
+        :type args: tuple
+        :param kwargs: Resolution keyword arguments.
+        :type kwargs: dict
+        '''
+
+        # A non-record is rejected before any service is resolved.
+        raise AssertionError('resolved a service for a non-record')
+
+    # The record says whether it is a matrix. A mapping does not.
+    handler = show_handler(get_dependency)
+    with pytest.raises(AttributeError):
+        handler({'name': 'Sales by Region'}, 8, 4)
 
 # ** test: blueprint_constructs_the_session_itself
 def test_blueprint_constructs_the_session_itself(tmp_path):
