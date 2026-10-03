@@ -472,8 +472,15 @@ def test_show_calls_render_or_render_matrix_on_the_plot_flag():
     assert list(signature.parameters) == ['self', 'record', 'width', 'height']
     assert signature.parameters['width'].default is inspect.Parameter.empty
     assert signature.parameters['height'].default is inspect.Parameter.empty
-    assert not hasattr(plot, 'width')
     assert not hasattr(session, 'width')
+
+# ** test: declaring_and_keeping_do_not_take_a_size
+def test_declaring_and_keeping_do_not_take_a_size():
+    '''
+    The chain, the events, and the keep contracts do not take width or height.
+    '''
+
+    # The chain declares a record. A picture size is not part of that call.
     for method in (
         PlotterSessionContext.draft,
         PlotterSessionContext.edit,
@@ -485,6 +492,8 @@ def test_show_calls_render_or_render_matrix_on_the_plot_flag():
         names = inspect.signature(method).parameters
         assert 'width' not in names
         assert 'height' not in names
+
+    # Create, update, and the keep contracts carry the record, not a size.
     for method in (
         CreatePlot.execute,
         UpdatePlot.execute,
@@ -497,6 +506,10 @@ def test_show_calls_render_or_render_matrix_on_the_plot_flag():
         names = inspect.signature(method).parameters
         assert 'width' not in names
         assert 'height' not in names
+
+    # The record has no size to read back.
+    assert not hasattr(line_plot(), 'width')
+    assert not hasattr(matrix(), 'height')
 
 # ** test: a_non_record_is_not_created_or_shown
 def test_a_non_record_is_not_created_or_shown():

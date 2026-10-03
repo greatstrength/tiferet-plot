@@ -57,36 +57,31 @@ TEXT_MARK_ROLES = (
 
 # *** functions
 
-# ** function: _picture_size
-def _picture_size(width, height) -> tuple:
+# ** function: _require_picture_size
+def _require_picture_size(width, height) -> None:
     '''
     Require a positive width and height in inches.
 
     A bool is not a width of 1. Text that looks like a number is not a
     size. Zero and a negative number are not a picture. There is no
-    default.
+    default. The pair the caller named is not changed.
 
     :param width: The picture width.
     :type width: Any
     :param height: The picture height.
     :type height: Any
-    :return: The width and height, unchanged.
-    :rtype: tuple
+    :return: None
+    :rtype: None
     '''
 
     # Check each extent. Do not coerce text, and do not fill a missing one.
     for name, value in (('width', width), ('height', height)):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if (isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value <= 0):
             raise ValueError(
                 f'{name.capitalize()} must be a positive number of inches.'
             )
-        if value <= 0:
-            raise ValueError(
-                f'{name.capitalize()} must be a positive number of inches.'
-            )
-
-    # Return the pair the caller named. It is not stored on the record.
-    return width, height
 
 # ** function: _is_numeric
 def _is_numeric(value) -> bool:
@@ -335,7 +330,7 @@ class MatplotlibRenderer(RendererService):
         '''
 
         # Refuse a size that is not a picture. Do not start a figure.
-        width, height = _picture_size(width, height)
+        _require_picture_size(width, height)
 
         # Refuse a record this renderer cannot draw. Do not start a picture.
         series_values = _drawable_series(plot)
@@ -375,7 +370,7 @@ class MatplotlibRenderer(RendererService):
         '''
 
         # Refuse a size that is not a picture. Do not draw a cell.
-        width, height = _picture_size(width, height)
+        _require_picture_size(width, height)
 
         # Draw every occupied cell at that same size. A failure returns no grid.
         pictures = []

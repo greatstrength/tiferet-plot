@@ -834,7 +834,6 @@ def test_matrix_picture_is_one_requested_size(monkeypatch):
     assert one_sizes == [(8, 6), (8, 6)]
     assert two_sizes == [(8, 6), (8, 6), (8, 6)]
     assert (4, 3) not in one_sizes
-    assert (4 * 1, 3 * 1) not in one_sizes
     source = Path(renderer_module.__file__).read_text()
     assert '4 * cols' not in source
     assert '3 * rows' not in source
