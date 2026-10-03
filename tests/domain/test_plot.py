@@ -11,7 +11,11 @@ import pytest
 from pydantic import ValidationError
 
 # ** app
+from tiferet.domain import ModelError
 from tiferet_plot.domain.plot import (
+    ADDITION_ROLE_MISSING_ID,
+    ADDITION_ROLE_NOT_IN_SERIES_ID,
+    ADDITION_SORT_MISMATCH_ID,
     Mark,
     MatrixCell,
     Plot,
@@ -84,6 +88,30 @@ def bar_marks(category=('North', 'South'), height=(10, 12)):
         Mark(role='category', values=category),
         Mark(role='height', values=height),
     ]
+
+# ** function: design_marks
+def design_marks(x=('alpha', 'beta'), y=(1, 2), label=('run-1', 'run-2')):
+    '''
+    Build line or scatter marks, with an optional label.
+
+    :param x: The x values. Text or numeric.
+    :type x: tuple
+    :param y: The y values. Text or numeric.
+    :type y: tuple
+    :param label: The point labels. Omit the role when None.
+    :type label: tuple | None
+    :return: Marks for a line or scatter series.
+    :rtype: list
+    '''
+
+    # x and y are required. Label is present only when the caller brings it.
+    marks = [
+        Mark(role='x', values=x),
+        Mark(role='y', values=y),
+    ]
+    if label is not None:
+        marks.append(Mark(role='label', values=label))
+    return marks
 
 # ** function: imported_modules
 def imported_modules(module) -> list:
@@ -290,6 +318,12 @@ def test_description_is_not_identity():
     ('scatter', line_marks() + [Mark(role='category', values=('North', 'South'))]),
     ('bar', bar_marks() + [Mark(role='x', values=(1, 2))]),
     ('bar', bar_marks() + [Mark(role='y', values=(1, 2))]),
+    ('bar', bar_marks() + [Mark(role='label', values=('a', 'b'))]),
+    ('line', line_marks() + [Mark(role='rotation', values=(45, 45))]),
+    ('line', line_marks() + [Mark(role='size', values=(12, 12))]),
+    ('line', line_marks() + [Mark(role='height', values=(1, 2))]),
+    ('scatter', line_marks() + [Mark(role='tick', values=('a', 'b'))]),
+    ('line', line_marks() + [Mark(role='x_label', values=('a', 'b'))]),
 ])
 def test_illegal_mark_roles_fail(kind, marks):
     '''
@@ -345,14 +379,14 @@ def test_omitted_or_unrecognized_kind_fails(kwargs):
     ('scatter', [Mark(role='x', values=(1, 2)), Mark(role='y', values=(3,))]),
     ('line', [Mark(role='x', values=(1, 2)), Mark(role='y', values=(3, '4'))]),
     ('scatter', [Mark(role='x', values=(1, True)), Mark(role='y', values=(3, 4))]),
-    ('line', [Mark(role='x', values=(1, 2)), Mark(role='y', values=('3', '4'))]),
+    ('line', [Mark(role='x', values=(1, '3')), Mark(role='y', values=(3, 4))]),
 ])
 def test_line_and_scatter_mark_values_fail(kind, marks):
     '''
-    Line and scatter require numeric x and y of equal non-empty length.
+    A missing role, a mixed sort, a boolean, or unequal lengths fail.
     '''
 
-    # A missing role, a length mismatch, or a non-numeric value fails.
+    # Text on one axis is legal. A mixed role is not.
     with pytest.raises(ValidationError):
         Plot(
             name='Sales by Region',
@@ -998,3 +1032,357 @@ def test_matrix_title_is_not_a_cell_title():
     assert matrix.cells[0].plot.title == 'Cell title'
     assert matrix.cells[0].plot.x_title == 'Year'
     assert matrix.cells[0].plot.title_text == 'Cell title'
+
+# ** test: text_on_line_derives_ids_from_the_names
+def test_text_on_line_derives_ids_from_the_names():
+    '''
+    Text on x and a point label do not become the plot id or the series id.
+    '''
+
+    # The acceptance record. No plot id and no series id.
+    plot = Plot(
+        name='Design Response',
+        kind='line',
+        series=[
+            Series(name='Trial', marks=design_marks()),
+        ],
+    )
+
+    # Identity comes from the names, once. The text is not an id.
+    assert plot.id == 'design_response'
+    assert plot.series[0].id == 'trial'
+    assert plot.id not in ('alpha', 'beta', 'run-1')
+    assert plot.series[0].id not in ('alpha', 'beta', 'run-1')
+    assert [mark.role for mark in plot.series[0].marks] == ['x', 'y', 'label']
+    assert plot.series[0].marks[0].values == ('alpha', 'beta')
+    assert plot.series[0].marks[1].values == (1, 2)
+    assert plot.series[0].marks[2].values == ('run-1', 'run-2')
+
+    # Figure text stays. This record still has no drawing fields.
+    # A mark is still a role and values.
+    assert set(Plot.model_fields) == {
+        'id',
+        'name',
+        'kind',
+        'description',
+        'title',
+        'x_title',
+        'x_unit',
+        'y_title',
+        'y_unit',
+        'series',
+    }
+    assert set(Series.model_fields) == {'id', 'name', 'marks'}
+    assert set(Mark.model_fields) == {'role', 'values'}
+    assert 'rotation' not in Plot.model_fields
+    assert 'size' not in Plot.model_fields
+    assert 'axis' not in Plot.model_fields
+    assert 'renderer' not in Plot.model_fields
+
+# ** test: text_on_scatter_succeeds
+def test_text_on_scatter_succeeds():
+    '''
+    Scatter accepts the same text x, numeric y, and label as a line.
+    '''
+
+    # Kind does not change the roles. The ids still come from the names.
+    plot = Plot(
+        name='Design Response',
+        kind='scatter',
+        series=[
+            Series(name='Trial', marks=design_marks()),
+        ],
+    )
+    assert plot.kind == 'scatter'
+    assert plot.id == 'design_response'
+    assert plot.series[0].id == 'trial'
+    assert [mark.role for mark in plot.series[0].marks] == ['x', 'y', 'label']
+
+# ** test: omitted_label_leaves_x_and_y_only
+def test_omitted_label_leaves_x_and_y_only():
+    '''
+    A line with text x and numeric y, and no label, still declares.
+    '''
+
+    # Label is optional. The roles are the required pair.
+    plot = Plot(
+        name='Design Response',
+        kind='line',
+        series=[
+            Series(name='Trial', marks=design_marks(label=None)),
+        ],
+    )
+    assert [mark.role for mark in plot.series[0].marks] == ['x', 'y']
+    assert plot.series[0].marks[0].values == ('alpha', 'beta')
+
+    # A numeric line, a numeric scatter, and a bar still declare without label.
+    numeric = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[Series(name='Revenue', marks=line_marks())],
+    )
+    scatter = Plot(
+        name='Q3 Revenue',
+        kind='scatter',
+        series=[Series(name='Revenue', marks=line_marks())],
+    )
+    bar = Plot(
+        name='Sales by Region',
+        kind='bar',
+        series=[Series(name='Revenue', marks=bar_marks())],
+    )
+    assert [mark.role for mark in numeric.series[0].marks] == ['x', 'y']
+    assert [mark.role for mark in scatter.series[0].marks] == ['x', 'y']
+    assert [mark.role for mark in bar.series[0].marks] == ['category', 'height']
+
+# ** test: label_may_differ_between_series
+def test_label_may_differ_between_series():
+    '''
+    One series may carry label and another may omit it when the sorts agree.
+    '''
+
+    # The second series has no label. Both axes agree.
+    plot = Plot(
+        name='Design Response',
+        kind='line',
+        series=[
+            Series(name='Trial', marks=design_marks()),
+            Series(name='Control', marks=design_marks(label=None)),
+        ],
+    )
+    assert [mark.role for mark in plot.series[0].marks] == ['x', 'y', 'label']
+    assert [mark.role for mark in plot.series[1].marks] == ['x', 'y']
+
+# ** test: text_y_with_numeric_x_succeeds
+def test_text_y_with_numeric_x_succeeds():
+    '''
+    A named design on y is text y. The numbers stay on x.
+    '''
+
+    # One axis is numeric. The text is not coerced and not trimmed.
+    plot = Plot(
+        name='Design Response',
+        kind='line',
+        series=[
+            Series(
+                name='Trial',
+                marks=design_marks(x=(1, 2), y=(' alpha', 'beta'), label=None),
+            ),
+        ],
+    )
+    assert plot.series[0].marks[1].values == (' alpha', 'beta')
+    assert isinstance(plot.series[0].marks[1].values[0], str)
+
+# ** test: two_text_axes_or_disagreeing_sorts_fail
+@pytest.mark.parametrize('kind,series', [
+    ('line', [
+        Series(name='Trial', marks=[
+            Mark(role='x', values=('alpha', 'beta')),
+            Mark(role='y', values=('one', 'two')),
+        ]),
+    ]),
+    ('line', [
+        Series(name='Trial', marks=design_marks(label=None)),
+        Series(name='Control', marks=line_marks()),
+    ]),
+    ('scatter', [
+        Series(name='Trial', marks=line_marks()),
+        Series(name='Control', marks=[
+            Mark(role='x', values=(1, 2)),
+            Mark(role='y', values=('alpha', 'beta')),
+        ]),
+    ]),
+])
+def test_two_text_axes_or_disagreeing_sorts_fail(kind, series):
+    '''
+    Two text axes fail. Series that disagree on the sort of an axis fail.
+    '''
+
+    # A line still marks a quantity. Two series that disagree are not one axis.
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Design Response',
+            kind=kind,
+            series=series,
+        )
+
+# ** test: blank_text_axis_fails
+@pytest.mark.parametrize('values', [('', 'beta'), ('   ', 'beta'), ('\t', 'beta')])
+def test_blank_text_axis_fails(values):
+    '''
+    A blank or whitespace-only text axis value fails.
+    '''
+
+    # A tick name that is blank is not a name.
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Design Response',
+            kind='line',
+            series=[
+                Series(name='Trial', marks=design_marks(x=values, label=None)),
+            ],
+        )
+
+# ** test: text_x_keeps_a_name_that_looks_like_a_number
+def test_text_x_keeps_a_name_that_looks_like_a_number():
+    '''
+    A text x value of "3" is the name 3. It is not coerced to a number.
+    '''
+
+    # The same characters on a numeric axis fail. On a text axis they stay text.
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Design Response',
+            kind='line',
+            series=[
+                Series(name='Trial', marks=line_marks(x=(1, '3'))),
+            ],
+        )
+    plot = Plot(
+        name='Design Response',
+        kind='line',
+        series=[
+            Series(name='Trial', marks=design_marks(x=('3', 'beta'), label=None)),
+        ],
+    )
+    assert plot.series[0].marks[0].values == ('3', 'beta')
+    assert isinstance(plot.series[0].marks[0].values[0], str)
+
+# ** test: label_length_and_sort_follow_the_points
+def test_label_length_and_sort_follow_the_points():
+    '''
+    Label matches x in length, is text, and may be an empty string.
+    '''
+
+    # A shorter label is not aligned with the points.
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Design Response',
+            kind='line',
+            series=[
+                Series(name='Trial', marks=design_marks(label=('run-1',))),
+            ],
+        )
+
+    # A number is not a point label.
+    with pytest.raises(ValidationError):
+        Plot(
+            name='Design Response',
+            kind='scatter',
+            series=[
+                Series(name='Trial', marks=design_marks(label=(1, 2))),
+            ],
+        )
+
+    # An empty string is an unlabeled point. It is not a missing role.
+    plot = Plot(
+        name='Design Response',
+        kind='line',
+        series=[
+            Series(name='Trial', marks=design_marks(label=('', 'run-2'))),
+        ],
+    )
+    assert plot.series[0].marks[2].values == ('', 'run-2')
+
+# ** test: cell_plot_with_text_x_requires_a_supplied_id
+def test_cell_plot_with_text_x_requires_a_supplied_id():
+    '''
+    A cell plot that uses text x still requires a supplied id.
+    '''
+
+    # The design name is not an id. Declaration does not derive one.
+    plot = {
+        'name': 'Design Response',
+        'kind': 'line',
+        'series': [
+            {
+                'name': 'Trial',
+                'marks': design_marks(label=None),
+            },
+        ],
+    }
+    with pytest.raises(ValidationError):
+        PlotMatrix(
+            name='Grid',
+            rows=1,
+            cols=1,
+            cells=[
+                {'row': 0, 'col': 0, 'plot': plot},
+            ],
+        )
+
+    # A supplied id is kept. It is not the design name and not alpha.
+    matrix = PlotMatrix(
+        name='Grid',
+        rows=1,
+        cols=1,
+        cells=[
+            {
+                'row': 0,
+                'col': 0,
+                'plot': {
+                    **plot,
+                    'id': 'kept_plot',
+                },
+            },
+        ],
+    )
+    assert matrix.cells[0].plot.id == 'kept_plot'
+    assert matrix.cells[0].plot.id != 'alpha'
+    assert matrix.cells[0].plot.id != 'design_response'
+    assert matrix.cells[0].plot.series[0].marks[0].values == ('alpha', 'beta')
+
+# ** test: a_series_describes_a_matching_addition
+def test_a_series_describes_a_matching_addition():
+    '''
+    An addition with the same roles and sorts is accepted, and nothing changes.
+    '''
+
+    # The series describes the addition. It does not take its values.
+    series = Series(name='Trial', marks=design_marks())
+    addition = Series(
+        name='Trial',
+        marks=design_marks(x=('gamma',), y=(3,), label=('run-3',)),
+    )
+    before = series.model_dump()
+    assert series.verify_addition(addition) is None
+
+    # Neither series was mutated by the description.
+    assert series.model_dump() == before
+    assert [mark.role for mark in series.marks] == ['x', 'y', 'label']
+    assert series.marks[0].values == ('alpha', 'beta')
+    assert addition.marks[0].values == ('gamma',)
+
+# ** test: a_series_names_an_addition_defect
+@pytest.mark.parametrize('marks,error_code', [
+    (
+        design_marks(x=('gamma',), y=(3,), label=None),
+        ADDITION_ROLE_MISSING_ID,
+    ),
+    (
+        design_marks(x=('gamma',), y=(3,)) + [
+            Mark(role='category', values=('East',)),
+        ],
+        ADDITION_ROLE_NOT_IN_SERIES_ID,
+    ),
+    (
+        design_marks(x=(9,), y=(3,), label=('run-3',)),
+        ADDITION_SORT_MISMATCH_ID,
+    ),
+])
+def test_a_series_names_an_addition_defect(marks, error_code):
+    '''
+    A missing role, an unknown role, or the other sort is a model defect.
+    '''
+
+    # The defect is named by the domain, not by a validation error.
+    series = Series(name='Trial', marks=design_marks())
+    before = series.model_dump()
+    with pytest.raises(ModelError) as caught:
+        series.verify_addition(Series(name='Trial', marks=marks))
+
+    # The error names the code and the offending series. The marks stayed.
+    assert caught.value.error_code == error_code
+    assert caught.value.model['type'] == 'Series'
+    assert caught.value.model['id'] == 'trial'
+    assert series.model_dump() == before

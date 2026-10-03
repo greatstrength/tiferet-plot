@@ -38,7 +38,11 @@ from tiferet_plot.interfaces.plot import (
     MatrixService,
     PlotService,
 )
-from tiferet_plot.mappers.plot import PlotAggregate, PlotMatrixAggregate
+from tiferet_plot.mappers.plot import (
+    PlotAggregate,
+    PlotConfigObject,
+    PlotMatrixAggregate,
+)
 import tiferet_plot.events.plot as events_module
 
 # *** classes
@@ -314,6 +318,32 @@ def line_series(name='Revenue', y=(3, 4)):
     # One series is enough for a declaration.
     return [
         Series(name=name, marks=line_marks(y=y)),
+    ]
+
+# ** function: design_series
+def design_series(x=('alpha', 'beta'), y=(1, 2), label=('run-1', 'run-2')):
+    '''
+    Build one line series with text x, numeric y, and an optional label.
+
+    :param x: The x values.
+    :type x: tuple
+    :param y: The y values.
+    :type y: tuple
+    :param label: The point labels. Omit the role when None.
+    :type label: tuple | None
+    :return: One series named Trial. The id is derived from that name.
+    :rtype: list
+    '''
+
+    # The series name is Trial. The text is not the id.
+    marks = [
+        Mark(role='x', values=x),
+        Mark(role='y', values=y),
+    ]
+    if label is not None:
+        marks.append(Mark(role='label', values=label))
+    return [
+        Series(name='Trial', marks=marks),
     ]
 
 # ** function: run
@@ -1097,3 +1127,109 @@ def test_create_matrix_accepts_title_and_not_axis_text():
     assert updated.id == 'sales_by_region'
     assert updated.title is None
     assert service.get('quarterly_sales') is None
+
+# ** test: create_keeps_text_on_a_line_and_rejects_a_second_save
+def test_create_keeps_text_on_a_line_and_rejects_a_second_save():
+    '''
+    Create of a labeled line keeps the marks. A second save of that id fails.
+    '''
+
+    # Declare and keep the acceptance record. No plot id is supplied.
+    service = FakePlotService()
+    series = design_series()
+    created = run(
+        CreatePlot,
+        service,
+        name='Design Response',
+        kind='line',
+        series=series,
+    )
+    loaded = run(GetPlot, service, id='design_response')
+
+    # The ids come from the names. The marks come back unchanged.
+    assert created.id == 'design_response'
+    assert created.series[0].id == 'trial'
+    assert [mark.role for mark in loaded.series[0].marks] == ['x', 'y', 'label']
+    assert loaded.series[0].marks[0].values == ('alpha', 'beta')
+    assert loaded.series[0].marks[1].values == (1, 2)
+    assert loaded.series[0].marks[2].values == ('run-1', 'run-2')
+
+    # The stored body excludes the plot id. Create and update gain no text fields.
+    stored = PlotConfigObject.from_model(created).to_primitive('to_data')
+    assert 'id' not in stored
+    assert 'rotation' not in stored
+    assert 'size' not in stored
+    assert 'label' not in inspect.signature(CreatePlot.execute).parameters
+    assert 'rotation' not in inspect.signature(CreatePlot.execute).parameters
+    assert 'label' not in inspect.signature(UpdatePlot.execute).parameters
+    assert 'rotation' not in inspect.signature(UpdatePlot.execute).parameters
+
+    # Saving a second time is still the rejected second save.
+    with pytest.raises(TiferetError) as caught:
+        run(
+            CreatePlot,
+            service,
+            name='Design Response',
+            kind='line',
+            series=series,
+        )
+    assert caught.value.error_code == PLOT_ALREADY_KEPT_ID
+    assert service.save_calls == ['design_response']
+    assert service.get('design_response').series[0].marks[0].values == ('alpha', 'beta')
+
+# ** test: update_of_label_or_a_design_name_does_not_change_ids
+def test_update_of_label_or_a_design_name_does_not_change_ids():
+    '''
+    Adding or dropping label, or renaming a design, does not change ids.
+    '''
+
+    # Keep a line whose x is the design names. No label yet.
+    service = FakePlotService()
+    run(
+        CreatePlot,
+        service,
+        name='Design Response',
+        kind='line',
+        series=design_series(label=None),
+    )
+
+    # Adding label does not recompute the plot id or the series id.
+    added = run(
+        UpdatePlot,
+        service,
+        id='design_response',
+        name='Design Response',
+        kind='line',
+        series=design_series(),
+    )
+    assert added.id == 'design_response'
+    assert added.series[0].id == 'trial'
+    assert [mark.role for mark in added.series[0].marks] == ['x', 'y', 'label']
+
+    # Dropping label does not recompute either id.
+    dropped = run(
+        UpdatePlot,
+        service,
+        id='design_response',
+        name='Design Response',
+        kind='line',
+        series=design_series(label=None),
+    )
+    assert dropped.id == 'design_response'
+    assert dropped.series[0].id == 'trial'
+    assert [mark.role for mark in dropped.series[0].marks] == ['x', 'y']
+
+    # Changing a design name from alpha to gamma does not recompute either id.
+    renamed = run(
+        UpdatePlot,
+        service,
+        id='design_response',
+        name='Design Response',
+        kind='line',
+        series=design_series(x=('gamma', 'beta'), label=None),
+    )
+    assert renamed.id == 'design_response'
+    assert renamed.series[0].id == 'trial'
+    assert renamed.series[0].marks[0].values == ('gamma', 'beta')
+    assert service.get('gamma') is None
+    assert service.get('alpha') is None

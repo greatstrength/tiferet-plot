@@ -1014,3 +1014,59 @@ def test_matrix_save_keeps_title_off_the_axis_keys(tmp_path):
     assert 'x_title' not in unnamed_body
     assert repo.get('Custom-Id').title is None
     assert repo.get('Custom-Id').title_text == 'Sales by Region'
+
+# ** test: loaded_b1_line_does_not_invent_a_label
+def test_loaded_b1_line_does_not_invent_a_label(seeded_plot_file):
+    '''
+    A kept line of x and y loads with those roles only.
+    '''
+
+    # The seeded publication has no label. The store does not invent one.
+    loaded = PlotConfigRepository(seeded_plot_file).get('sales_by_region')
+    assert [mark.role for mark in loaded.series[0].marks] == ['x', 'y']
+    assert loaded.series[0].marks[0].values == (1, 2)
+    assert loaded.series[0].marks[1].values == (3, 4)
+
+# ** test: text_marks_round_trip_and_the_body_excludes_the_plot_id
+def test_text_marks_round_trip_and_the_body_excludes_the_plot_id(tmp_path):
+    '''
+    Text x and label survive the publication file. The plot id stays the key.
+    '''
+
+    # Save the acceptance record. The id is derived from the name, not the text.
+    repo, path = open_repo(tmp_path, '.yml')
+    plot = PlotAggregate(
+        name='Design Response',
+        kind='line',
+        series=[
+            SeriesAggregate(
+                name='Trial',
+                marks=[
+                    Mark(role='x', values=('alpha', 'beta')),
+                    Mark(role='y', values=(1, 2)),
+                    Mark(role='label', values=('run-1', 'run-2')),
+                ],
+            ),
+        ],
+    )
+    repo.save(plot)
+
+    # The body has no plot id. The marks come back as stored.
+    body = repo._load()['plots']['design_response']
+    assert 'id' not in body
+    assert 'rotation' not in body
+    assert 'size' not in body
+    loaded = repo.get('design_response')
+    assert loaded.id == 'design_response'
+    assert loaded.series[0].id == 'trial'
+    assert [mark.role for mark in loaded.series[0].marks] == ['x', 'y', 'label']
+    assert loaded.series[0].marks[0].values == ('alpha', 'beta')
+    assert loaded.series[0].marks[2].values == ('run-1', 'run-2')
+    assert isinstance(loaded.series[0].marks[0].values[0], str)
+
+    # A second save of that id is still rejected. The file is unchanged.
+    before = path.read_bytes()
+    with pytest.raises(ServiceError) as caught:
+        repo.save(plot)
+    assert caught.value.error_code == PLOT_ALREADY_KEPT_ID
+    assert path.read_bytes() == before

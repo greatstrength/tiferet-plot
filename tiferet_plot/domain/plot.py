@@ -11,6 +11,7 @@ from pydantic import Field, field_validator, model_validator
 
 # ** app
 from tiferet import DomainObject
+from tiferet.domain import ModelError
 
 # *** constants
 
@@ -37,16 +38,59 @@ MARK_ROLES_BY_KIND = {
     ),
 }
 
+# ** constant: optional_mark_roles_by_kind
+OPTIONAL_MARK_ROLES_BY_KIND = {
+    'line': (
+        'label',
+    ),
+    'scatter': (
+        'label',
+    ),
+    'bar': (),
+}
+
 # ** constant: numeric_mark_roles
 NUMERIC_MARK_ROLES = (
-    'x',
-    'y',
     'height',
 )
 
 # ** constant: text_mark_roles
 TEXT_MARK_ROLES = (
     'category',
+    'label',
+)
+
+# ** constant: axis_mark_roles
+AXIS_MARK_ROLES = (
+    'x',
+    'y',
+)
+
+# *** constants (error)
+
+# ** constant: addition_role_not_in_series_id
+ADDITION_ROLE_NOT_IN_SERIES_ID = 'ADDITION_ROLE_NOT_IN_SERIES'
+
+# ** constant: addition_role_not_in_series_message
+ADDITION_ROLE_NOT_IN_SERIES_MESSAGE = (
+    'The addition carries mark role {role}, which this series does not carry.'
+)
+
+# ** constant: addition_role_missing_id
+ADDITION_ROLE_MISSING_ID = 'ADDITION_ROLE_MISSING'
+
+# ** constant: addition_role_missing_message
+ADDITION_ROLE_MISSING_MESSAGE = (
+    'The addition omits mark role {role}, which this series carries.'
+)
+
+# ** constant: addition_sort_mismatch_id
+ADDITION_SORT_MISMATCH_ID = 'ADDITION_SORT_MISMATCH'
+
+# ** constant: addition_sort_mismatch_message
+ADDITION_SORT_MISMATCH_MESSAGE = (
+    'The addition plays mark role {role} as {addition_sort} values, '
+    'and this series plays it as {series_sort} values.'
 )
 
 # *** functions
@@ -236,17 +280,72 @@ def _is_numeric(value: Any) -> bool:
     # Accept only real numbers. Do not coerce text.
     return isinstance(value, (int, float))
 
+# ** function: _role_sort
+def _role_sort(role: str, values: Sequence[Any]) -> str:
+    '''
+    Return the sort of one role, or fail when the values are not that sort.
+
+    Height is numeric. Category and label are text. An empty label is an
+    unlabeled point. x and y are each one sort for the whole role: all
+    numeric, or all non-blank text. Text that looks like a number is not
+    coerced.
+
+    :param role: The mark role.
+    :type role: str
+    :param values: The values that play the role.
+    :type values: Sequence[Any]
+    :return: ``numeric`` or ``text``.
+    :rtype: str
+    '''
+
+    # Height stays numeric. Do not accept text that looks like a number.
+    if role in NUMERIC_MARK_ROLES:
+        if any(not _is_numeric(value) for value in values):
+            raise ValueError(
+                f'Mark role {role!r} requires numeric values.'
+            )
+        return 'numeric'
+
+    # Category and label are text. A blank label is still text.
+    if role in TEXT_MARK_ROLES:
+        if any(not isinstance(value, str) for value in values):
+            raise ValueError(
+                f'Mark role {role!r} requires text values.'
+            )
+        return 'text'
+
+    # An axis is one sort. A blank name is not a position.
+    if role in AXIS_MARK_ROLES:
+        if all(_is_numeric(value) for value in values):
+            return 'numeric'
+        if all(isinstance(value, str) for value in values):
+            if any(_is_blank(value) for value in values):
+                raise ValueError(
+                    f'Mark role {role!r} requires a non-blank name '
+                    'when the values are text.'
+                )
+            return 'text'
+        raise ValueError(
+            f'Mark role {role!r} requires values of one sort, numeric or text.'
+        )
+
+    # A role outside the closed list is not a sort this check names.
+    raise ValueError(f'Mark role {role!r} is not a declared role.')
+
 # ** function: _validate_marks
-def _validate_marks(kind: str, marks: Sequence[Mark]) -> None:
+def _validate_marks(kind: str, marks: Sequence[Mark]) -> dict:
     '''
     Require the mark roles a kind selects, and no others.
+
+    Line and scatter may also carry label. On those kinds, x and y are
+    each one sort, and at least one of them is numeric.
 
     :param kind: The plot kind.
     :type kind: str
     :param marks: The series marks.
     :type marks: Sequence[Mark]
-    :return: None
-    :rtype: None
+    :return: The sort of x and of y, when this kind has those roles.
+    :rtype: dict
     '''
 
     # Index marks by role and reject a repeated role.
@@ -256,44 +355,57 @@ def _validate_marks(kind: str, marks: Sequence[Mark]) -> None:
             raise ValueError(f'Duplicate mark role {mark.role!r}.')
         by_role[mark.role] = mark
 
-    # The kind selects the legal roles. Extra roles are invalid.
+    # The kind selects the legal roles. Label is optional. Extra roles fail.
     required = MARK_ROLES_BY_KIND[kind]
-    extra = [role for role in by_role if role not in required]
+    allowed = required + OPTIONAL_MARK_ROLES_BY_KIND[kind]
+    extra = [role for role in by_role if role not in allowed]
     if extra:
         raise ValueError(
             f'Kind {kind!r} does not allow mark role {extra[0]!r}.'
         )
 
-    # Every required role must be present.
+    # Every required role must be present. Label may be absent.
     missing = [role for role in required if role not in by_role]
     if missing:
         raise ValueError(
             f'Kind {kind!r} requires mark role {missing[0]!r}.'
         )
 
-    # Required values must be the right sort, non-empty, and the same length.
+    # Present values must be one sort, non-empty, and the same length.
     lengths = []
-    for role in required:
+    sorts = {}
+    for role in allowed:
+        if role not in by_role:
+            continue
         values = by_role[role].values
         if len(values) < 1:
             raise ValueError(
                 f'Mark role {role!r} requires at least one value.'
             )
-        if role in NUMERIC_MARK_ROLES and any(
-                not _is_numeric(value) for value in values):
-            raise ValueError(
-                f'Mark role {role!r} requires numeric values.'
-            )
-        if role in TEXT_MARK_ROLES and any(
-                not isinstance(value, str) for value in values):
-            raise ValueError(
-                f'Mark role {role!r} requires text values.'
-            )
+        sorts[role] = _role_sort(role, values)
         lengths.append(len(values))
 
     # Equal length is part of being well-formed for the kind.
     if len(set(lengths)) != 1:
         raise ValueError('Mark value sequences must have equal length.')
+
+    # A line or a scatter still marks a quantity. Two text axes do not.
+    both_text = (
+        kind in ('line', 'scatter')
+        and sorts.get('x') == 'text'
+        and sorts.get('y') == 'text'
+    )
+    if both_text:
+        raise ValueError(
+            f'Kind {kind!r} requires at least one of x and y to be numeric.'
+        )
+
+    # Return the axis sorts so series on one plot can be compared.
+    return {
+        role: sorts[role]
+        for role in AXIS_MARK_ROLES
+        if role in sorts
+    }
 
 # ** function: _require_plot_id
 def _require_plot_id(plot: Any) -> None:
@@ -371,6 +483,9 @@ def _validate_series(kind: str, series: Sequence[Series]) -> None:
     '''
     Reject duplicate series ids and marks that do not match the kind.
 
+    Series on a line or a scatter agree on the sort of x and on the sort
+    of y. They need not agree on whether label is present.
+
     :param kind: The plot kind.
     :type kind: str
     :param series: The declared series.
@@ -381,6 +496,7 @@ def _validate_series(kind: str, series: Sequence[Series]) -> None:
 
     # Two series in one plot may not resolve to the same id.
     seen = set()
+    axis_sorts = {}
     for item in series:
         if item.id in seen:
             raise ValueError(
@@ -389,7 +505,18 @@ def _validate_series(kind: str, series: Sequence[Series]) -> None:
         seen.add(item.id)
 
         # The kind rectifies this series' marks. It does not add plot fields.
-        _validate_marks(kind, item.marks)
+        sorts = _validate_marks(kind, item.marks)
+
+        # Every series agrees on the sort of each axis. Label may differ.
+        for role, sort in sorts.items():
+            agreed = axis_sorts.get(role)
+            if agreed is None:
+                axis_sorts[role] = sort
+                continue
+            if agreed != sort:
+                raise ValueError(
+                    f'Series disagree on the sort of mark role {role!r}.'
+                )
 
 # *** models
 
@@ -441,6 +568,70 @@ class Series(DomainObject):
         ...,
         description='The role-and-values marks this series carries.',
     )
+
+    # * method: verify_addition
+    def verify_addition(self, addition: Series) -> None:
+        '''
+        Describe another series as an addition to this one, and fail
+        when it is not one.
+
+        An addition carries exactly the roles this series carries,
+        including ``label`` when this series has it, and plays each of
+        them as the same sort. A legal series on its own is not an
+        addition to this series. Neither series is changed.
+
+        :param addition: The series whose values would extend this one.
+        :type addition: Series
+        :return: None
+        :rtype: None
+        :raises ModelError: ``ADDITION_ROLE_NOT_IN_SERIES`` for a role this
+            series does not carry, ``ADDITION_ROLE_MISSING`` for one it
+            carries that the addition omits, and ``ADDITION_SORT_MISMATCH``
+            when a shared role is played as the other sort.
+        '''
+
+        # The addition carries these roles, not a fresh required pair.
+        roles = [mark.role for mark in self.marks]
+        added_roles = [mark.role for mark in addition.marks]
+        extra = [role for role in added_roles if role not in roles]
+        if extra:
+            ModelError.raise_error(
+                ADDITION_ROLE_NOT_IN_SERIES_ID,
+                message=ADDITION_ROLE_NOT_IN_SERIES_MESSAGE.format(
+                    role=extra[0],
+                ),
+                model=self,
+                role=extra[0],
+            )
+
+        # A role this series carries is not optional in the addition.
+        missing = [role for role in roles if role not in added_roles]
+        if missing:
+            ModelError.raise_error(
+                ADDITION_ROLE_MISSING_ID,
+                message=ADDITION_ROLE_MISSING_MESSAGE.format(
+                    role=missing[0],
+                ),
+                model=self,
+                role=missing[0],
+            )
+
+        # Sorts match this series. A legal sort on its own is not enough.
+        values = {mark.role: mark.values for mark in self.marks}
+        for mark in addition.marks:
+            series_sort = _role_sort(mark.role, values[mark.role])
+            addition_sort = _role_sort(mark.role, mark.values)
+            if addition_sort != series_sort:
+                ModelError.raise_error(
+                    ADDITION_SORT_MISMATCH_ID,
+                    message=ADDITION_SORT_MISMATCH_MESSAGE.format(
+                        role=mark.role,
+                        addition_sort=addition_sort,
+                        series_sort=series_sort,
+                    ),
+                    model=self,
+                    role=mark.role,
+                )
 
     # * method: _derive_id (model validator)
     @model_validator(mode='before')

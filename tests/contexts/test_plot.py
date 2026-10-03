@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from tiferet import TiferetAPIError
 from tiferet.contexts.app import AppSession, AppSessionContext
 from tiferet.contexts.core import BaseContext
+from tiferet.domain import ModelError
 from tiferet.interfaces import ServiceError
 from tiferet_plot.contexts.plot import (
     CREATE_MATRIX_EVENT_ID,
@@ -28,6 +29,9 @@ from tiferet_plot.contexts.plot import (
 from tiferet_plot.events.plot import CreateMatrix, CreatePlot, UpdatePlot
 from tiferet_plot.interfaces.plot import MatrixService, PlotService
 from tiferet_plot.domain.plot import (
+    ADDITION_ROLE_MISSING_ID,
+    ADDITION_ROLE_NOT_IN_SERIES_ID,
+    ADDITION_SORT_MISMATCH_ID,
     Mark,
     MatrixCell,
     Plot,
@@ -702,7 +706,6 @@ def test_append_addresses_a_series_by_id():
     ('line', [{'role': 'x', 'values': ()}, {'role': 'y', 'values': ()}]),
     ('line', [Mark(role='x', values=(5,))]),
     ('line', line_marks(x=(5,), y=(6,)) + [Mark(role='category', values=('East',))]),
-    ('line', [Mark(role='x', values=(5,)), Mark(role='y', values=('6',))]),
     ('scatter', [Mark(role='x', values=(5,)), Mark(role='y', values=(6, 7))]),
     ('bar', [Mark(role='category', values=('East',)), Mark(role='height', values=(1, 2))]),
     ('line', bar_marks()),
@@ -1272,3 +1275,106 @@ def test_create_handler_passes_title_and_y_title():
     assert matrix_event.kwargs['title'] == 'Quarterly sales by region'
     assert 'x_title' not in matrix_event.kwargs
     assert 'y_title' not in matrix_event.kwargs
+
+# ** test: add_series_has_no_labels_parameter
+def test_add_series_has_no_labels_parameter():
+    '''
+    add_series takes marks. It does not take a labels argument.
+    '''
+
+    # Text rides on the marks. It is not a second parameter.
+    assert 'labels' not in inspect.signature(
+        PlotterSessionContext.add_series).parameters
+    assert 'rotation' not in inspect.signature(
+        PlotterSessionContext.add_series).parameters
+
+# ** test: draft_add_series_and_append_do_not_derive_ids_from_text
+def test_draft_add_series_and_append_do_not_derive_ids_from_text():
+    '''
+    Text on x and label does not become the plot id or the series id.
+    '''
+
+    # Draft derives the plot id from the name. The text is not that name.
+    session = bound(create=lambda record: record)
+    session.draft('Design Response', 'line')
+    session.add_series('Trial', [
+        Mark(role='x', values=('alpha', 'beta')),
+        Mark(role='y', values=(1, 2)),
+        Mark(role='label', values=('run-1', 'run-2')),
+    ])
+    assert session.append('trial', [
+        Mark(role='x', values=('gamma',)),
+        Mark(role='y', values=(3,)),
+        Mark(role='label', values=('run-3',)),
+    ]) is session
+    kept = session.create()
+
+    # Neither id was recomputed from the text. The roles stayed.
+    assert kept.id == 'design_response'
+    assert kept.series[0].id == 'trial'
+    assert kept.id not in ('alpha', 'beta', 'gamma', 'run-1', 'run-3')
+    assert kept.series[0].id not in ('alpha', 'beta', 'gamma', 'run-1', 'run-3')
+    assert mark_values(kept) == [
+        ('alpha', 'beta', 'gamma'),
+        (1, 2, 3),
+        ('run-1', 'run-2', 'run-3'),
+    ]
+
+# ** test: append_role_and_sort_mismatches_leave_the_marks_unchanged
+def test_append_role_and_sort_mismatches_leave_the_marks_unchanged():
+    '''
+    An addition that does not match the series' roles or sorts changes nothing.
+    '''
+
+    # A labeled text-x series rejects a missing label and a numeric x.
+    session = bound(create=lambda record: record)
+    session.draft('Design Response', 'line')
+    labeled = [
+        Mark(role='x', values=('alpha', 'beta')),
+        Mark(role='y', values=(1, 2)),
+        Mark(role='label', values=('run-1', 'run-2')),
+    ]
+    session.add_series('Trial', labeled)
+    with pytest.raises(ModelError) as omitted:
+        session.append('trial', [
+            Mark(role='x', values=('gamma',)),
+            Mark(role='y', values=(3,)),
+        ])
+    with pytest.raises(ModelError) as wrong_sort:
+        session.append('trial', [
+            Mark(role='x', values=(9,)),
+            Mark(role='y', values=(3,)),
+            Mark(role='label', values=('run-3',)),
+        ])
+    kept = session.create()
+
+    # The domain named the defect. The marks did not change.
+    assert omitted.value.error_code == ADDITION_ROLE_MISSING_ID
+    assert wrong_sort.value.error_code == ADDITION_SORT_MISMATCH_ID
+    assert kept.id == 'design_response'
+    assert kept.series[0].id == 'trial'
+    assert mark_values(kept) == [
+        ('alpha', 'beta'),
+        (1, 2),
+        ('run-1', 'run-2'),
+    ]
+
+    # A series without label rejects an addition that includes one.
+    session = bound(create=lambda record: record)
+    session.draft('Sales by Region', 'line')
+    session.add_series('Revenue', line_marks())
+    with pytest.raises(ModelError) as added_label:
+        session.append('revenue', line_marks(x=(5,), y=(6,)) + [
+            Mark(role='label', values=('run-3',)),
+        ])
+    with pytest.raises(ModelError) as text_y:
+        session.append('revenue', [
+            Mark(role='x', values=(5,)),
+            Mark(role='y', values=('6',)),
+        ])
+    kept = session.create()
+    assert added_label.value.error_code == ADDITION_ROLE_NOT_IN_SERIES_ID
+    assert text_y.value.error_code == ADDITION_SORT_MISMATCH_ID
+    assert kept.id == 'sales_by_region'
+    assert kept.series[0].id == 'revenue'
+    assert mark_values(kept) == [(1, 2), (3, 4)]

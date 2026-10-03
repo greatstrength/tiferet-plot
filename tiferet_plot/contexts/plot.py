@@ -557,8 +557,9 @@ class PlotterSessionContext(AppSessionContext):
         '''
         Add one series to the open plot.
 
-        Marks are the role-and-values structure the kind already
-        requires. A missing or blank series id is derived once from
+        Marks are a role and its values. A line or a scatter may
+        include label, and x or y may be text, when the plot's sort
+        rules hold. A missing or blank series id is derived once from
         the series name. A supplied series id is kept. The plot id is
         not recomputed.
 
@@ -613,10 +614,11 @@ class PlotterSessionContext(AppSessionContext):
         '''
         Add values to an existing series' marks.
 
-        The series is addressed by id, not by name. Every required role
-        is present, no other role is present, and the added sequences
-        are non-empty and of equal length. A failure leaves the marks
-        unchanged.
+        The series is addressed by id, not by name. The addition carries
+        exactly the roles that series already carries, including label
+        when the series has it. Sorts match that series. The added
+        sequences are non-empty and of equal length. A failure leaves
+        the marks unchanged.
 
         :param series_id: The id of the series to extend.
         :type series_id: str
@@ -657,6 +659,9 @@ class PlotterSessionContext(AppSessionContext):
             y_title=self._open['y_title'],
             y_unit=self._open['y_unit'],
         )
+
+        # The series describes the addition. Its failure is a model defect.
+        current.verify_addition(addition)
 
         # Rebuild every series. Only the addressed series gains values.
         rebuilt = []
