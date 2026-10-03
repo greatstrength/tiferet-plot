@@ -217,12 +217,12 @@ The file repository is not an entanglement. `FormulaService` does not mention YA
 
 ## 9. Boundaries
 
-Inside this domain: the plot record, series and marks, the kind rules for line, scatter, and bar, the plot service, the publication-file store, the Matplotlib renderer, and the plotter session that creates and shows.
+Inside this domain: the plot record, series and marks, declared appearance, the kind rules for line, scatter, and bar, the plot service, the publication-file store, the Matplotlib renderer, and the plotter session that creates and shows. Declared appearance is the legend, the series style, and the text formatting the picture shows. It is part of the record, so a reload of the publication file can draw the same appearance. The picture remains a rendering of that record. It does not become the record.
 
 Outside, and who owns it:
 
 - Which data belong in the figure, and whether the claim is true. The person declaring the plot.
-- How a mark is stroked, filled, or labeled in a particular library. Matplotlib, behind the renderer service. This domain says what is being drawn.
+- The library's parameter names for how a mark is stroked, filled, or labeled. Matplotlib kwargs, rcParams, and tool spellings stay behind the renderer service. This domain names the appearance. It does not store the library's parameter names.
 - Application startup, the five required handlers, feature execution, and dependency injection. The Tiferet framework. This domain supplies a session and a blueprint. It does not replace `build_app`.
 - A database store. A later round, on the same plot service. Not a second contract.
 - Histogram, image, heatmap, three-dimensional charts, and other drawing libraries. Later kinds and later renderers. Not this round.
