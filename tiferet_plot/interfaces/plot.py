@@ -30,19 +30,31 @@ class RendererService(Service):
     '''
     Vertical contract for turning a plot record into a picture.
 
-    The picture is PNG bytes. The contract does not name a drawing tool.
-    An unsaved record is a valid input. Keeping the record and writing
-    a publication file are not this service.
+    The picture is PNG bytes. The caller names that picture's width
+    and height, in inches, on the call. They are not fields of the
+    record. The contract does not name a drawing tool. An unsaved
+    record is a valid input. Keeping the record and writing a
+    publication file are not this service.
     '''
 
     # * method: render
     @abstractmethod
-    def render(self, plot: PlotAggregate) -> bytes:
+    def render(self,
+            plot: PlotAggregate,
+            width: float,
+            height: float) -> bytes:
         '''
-        Render a plot record to PNG bytes.
+        Render a plot record to PNG bytes of the given size.
+
+        Width and height are both required. They are inches. They are
+        not fields of the plot, and a missing one is not filled in.
 
         :param plot: The declared plot record.
         :type plot: PlotAggregate
+        :param width: The picture width, in inches.
+        :type width: float
+        :param height: The picture height, in inches.
+        :type height: float
         :return: The picture as PNG bytes.
         :rtype: bytes
         '''
@@ -54,15 +66,24 @@ class RendererService(Service):
 
     # * method: render_matrix
     @abstractmethod
-    def render_matrix(self, matrix: PlotMatrixAggregate) -> bytes:
+    def render_matrix(self,
+            matrix: PlotMatrixAggregate,
+            width: float,
+            height: float) -> bytes:
         '''
-        Render a declared grid to one PNG.
+        Render a declared grid to one PNG of the given size.
 
-        Empty positions are part of that picture. This is not ``render``.
-        An unsaved matrix is a valid input. The contract does not open a store.
+        Width and height size that one picture. They are not a size per
+        cell, and they are not read from the grid shape. Empty positions
+        are part of that picture. This is not ``render``. An unsaved
+        matrix is a valid input. The contract does not open a store.
 
         :param matrix: The declared matrix.
         :type matrix: PlotMatrixAggregate
+        :param width: The picture width, in inches.
+        :type width: float
+        :param height: The picture height, in inches.
+        :type height: float
         :return: The grid as PNG bytes.
         :rtype: bytes
         '''

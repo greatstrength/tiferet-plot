@@ -245,8 +245,51 @@ def render_parameters() -> list:
     :rtype: list
     '''
 
-    # The service takes a plot and nothing else.
+    # The service takes a plot and the picture size. Nothing else.
     return list(inspect.signature(MatplotlibRenderer.render).parameters)
+
+# ** function: grid
+def grid(rows, cols, plots=None):
+    '''
+    Declare a matrix with the given shape and occupied plots.
+
+    :param rows: The declared row count.
+    :type rows: int
+    :param cols: The declared column count.
+    :type cols: int
+    :param plots: Occupied plots, placed in row-major order.
+    :type plots: list | None
+    :return: A declared matrix that has not been kept.
+    :rtype: PlotMatrix
+    '''
+
+    # One plot fills the first cell when the caller does not pass any.
+    if plots is None:
+        plots = [line_plot()]
+    cells = [
+        MatrixCell(row=index // cols, col=index % cols, plot=plot)
+        for index, plot in enumerate(plots)
+    ]
+    return PlotMatrix(
+        name='Sales by Region',
+        rows=rows,
+        cols=cols,
+        cells=cells,
+    )
+
+# ** function: refuse_figure
+def refuse_figure(*args, **kwargs):
+    '''
+    Fail if a picture is started.
+
+    :param args: Figure arguments.
+    :type args: tuple
+    :param kwargs: Figure keyword arguments.
+    :type kwargs: dict
+    '''
+
+    # A refused size or record must not construct a figure.
+    raise AssertionError('renderer started a picture')
 
 # *** tests
 
@@ -258,9 +301,9 @@ def test_line_and_scatter_render_from_x_and_y():
 
     # Both kinds draw the same roles. The pictures are not empty.
     renderer = MatplotlibRenderer()
-    line = renderer.render(line_plot())
-    scatter = renderer.render(line_plot(kind='scatter'))
-    changed = renderer.render(line_plot(y=(30, 40)))
+    line = renderer.render(line_plot(), 8, 4)
+    scatter = renderer.render(line_plot(kind='scatter'), 8, 4)
+    changed = renderer.render(line_plot(y=(30, 40)), 8, 4)
 
     # The bytes are a PNG, and the y values are in the picture.
     assert isinstance(line, bytes)
@@ -284,8 +327,8 @@ def test_bar_renders_from_category_and_height():
 
     # Render, then change only the height.
     renderer = MatplotlibRenderer()
-    picture = renderer.render(plot)
-    taller = renderer.render(bar_plot(height=(80, 12)))
+    picture = renderer.render(plot, 8, 4)
+    taller = renderer.render(bar_plot(height=(80, 12)), 8, 4)
 
     # The picture uses the heights. The record's roles are unchanged.
     assert image_data(picture)
@@ -321,8 +364,8 @@ def test_unsaved_record_renders_without_a_store(tmp_path, monkeypatch):
 
     # Render both. Neither call has a store.
     renderer = MatplotlibRenderer()
-    picture = renderer.render(plot)
-    aggregate_picture = renderer.render(aggregate)
+    picture = renderer.render(plot, 8, 4)
+    aggregate_picture = renderer.render(aggregate, 8, 4)
 
     # The pictures exist. No file was written. Ids were not rewritten.
     assert image_data(picture)
@@ -352,7 +395,7 @@ def test_illegal_kind_fails_and_returns_no_picture(kind, monkeypatch, tmp_path):
 
     # The failure is the picture not being returned.
     with pytest.raises(ValueError):
-        MatplotlibRenderer().render(record)
+        MatplotlibRenderer().render(record, 8, 4)
     assert list(tmp_path.iterdir()) == []
 
 # ** test: illegal_marks_fail_and_return_no_picture
@@ -382,7 +425,7 @@ def test_illegal_marks_fail_and_return_no_picture(
 
     # No picture, and no publication file.
     with pytest.raises(ValueError):
-        MatplotlibRenderer().render(illegal_record(kind, marks))
+        MatplotlibRenderer().render(illegal_record(kind, marks), 8, 4)
     assert list(tmp_path.iterdir()) == []
 
 # ** test: renderer_does_not_keep_or_import_a_store
@@ -392,7 +435,7 @@ def test_renderer_does_not_keep_or_import_a_store():
     '''
 
     # The utility has no store, no path argument, and no file writer.
-    assert render_parameters() == ['self', 'plot']
+    assert render_parameters() == ['self', 'plot', 'width', 'height']
     source = Path(renderer_module.__file__).read_text()
     assert 'PlotService' not in source
     assert 'open(' not in source
@@ -466,33 +509,36 @@ def test_render_matrix_calls_render_once_per_occupied_cell(tmp_path, monkeypatch
     calls = []
     real_render = renderer.render
 
-    def wrapped(record):
+    def wrapped(record, width, height):
         '''
         Count render calls and delegate to the real method.
 
         :param record: The cell plot.
         :type record: Plot
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
         :return: The cell picture.
         :rtype: bytes
         '''
 
-        # Record the object, not a looked-up copy.
-        calls.append(record)
-        return real_render(record)
+        # Record the object and the pair. Do not invent a cell size.
+        calls.append((record, width, height))
+        return real_render(record, width, height)
 
     renderer.render = wrapped
-    grid = renderer.render_matrix(matrix)
-    alone = real_render(plot)
+    grid = renderer.render_matrix(matrix, 8, 6)
+    alone = real_render(plot, 8, 6)
 
-    # One call, on that cell's plot. The grid is one PNG and is not that cell alone.
-    assert calls == [plot]
+    # One call, on that cell's plot, with the same pair. The grid is not that cell.
+    assert calls == [(plot, 8, 6)]
     assert grid.startswith(PNG_SIGNATURE)
     assert grid.count(b'IEND') == 1
     assert image_data(grid)
     assert image_data(grid) != image_data(alone)
-    assert png_size(grid) != png_size(alone)
     assert list(tmp_path.iterdir()) == []
-    assert render_parameters() == ['self', 'plot']
+    assert render_parameters() == ['self', 'plot', 'width', 'height']
 
 # ** test: same_plot_id_is_rendered_twice
 def test_same_plot_id_is_rendered_twice():
@@ -515,27 +561,31 @@ def test_same_plot_id_is_rendered_twice():
     calls = []
     real_render = renderer.render
 
-    def wrapped(record):
+    def wrapped(record, width, height):
         '''
         Count render calls and delegate to the real method.
 
         :param record: The cell plot.
         :type record: Plot
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
         :return: The cell picture.
         :rtype: bytes
         '''
 
-        # Do not collapse the two placements into one call.
-        calls.append(record)
-        return real_render(record)
+        # Do not collapse the two placements into one call or two sizes.
+        calls.append((record, width, height))
+        return real_render(record, width, height)
 
     renderer.render = wrapped
-    grid = renderer.render_matrix(matrix)
+    grid = renderer.render_matrix(matrix, 8, 6)
 
-    # Two calls, two objects, one picture.
-    assert calls == [first, second]
-    assert calls[0] is not calls[1]
-    assert calls[0].id == calls[1].id
+    # Two calls, two objects, one pair, one picture.
+    assert calls == [(first, 8, 6), (second, 8, 6)]
+    assert calls[0][0] is not calls[1][0]
+    assert calls[0][0].id == calls[1][0].id
     assert image_data(grid)
     assert grid.count(b'IEND') == 1
 
@@ -562,7 +612,7 @@ def test_render_matrix_fails_when_a_cell_fails(tmp_path, monkeypatch):
 
     # The failure is the picture not being returned. No file is written.
     with pytest.raises(ValueError):
-        MatplotlibRenderer().render_matrix(matrix)
+        MatplotlibRenderer().render_matrix(matrix, 8, 6)
     assert list(tmp_path.iterdir()) == []
 
 # ** test: render_matrix_does_not_open_a_store
@@ -573,7 +623,7 @@ def test_render_matrix_does_not_open_a_store():
 
     # The method takes a matrix. It has no store and no path argument.
     signature = inspect.signature(MatplotlibRenderer.render_matrix)
-    assert list(signature.parameters) == ['self', 'matrix']
+    assert list(signature.parameters) == ['self', 'matrix', 'width', 'height']
     source = inspect.getsource(MatplotlibRenderer.render_matrix)
     assert 'PlotService' not in source
     assert 'MatrixService' not in source
@@ -604,7 +654,7 @@ def test_render_does_not_read_figure_text():
     render and render_matrix do not read name, title, description, or axis text.
     '''
 
-    # The methods still take only the record. They do not name the new fields.
+    # Size is an argument. The methods still do not name the figure-text fields.
     render_source = inspect.getsource(MatplotlibRenderer.render)
     matrix_source = inspect.getsource(MatplotlibRenderer.render_matrix)
     for source in (render_source, matrix_source):
@@ -635,18 +685,155 @@ def test_render_does_not_read_figure_text():
         ],
     )
     renderer = MatplotlibRenderer()
-    assert image_data(renderer.render(plain)) == image_data(renderer.render(titled))
+    assert image_data(renderer.render(plain, 8, 4)) == image_data(
+        renderer.render(titled, 8, 4),
+    )
 
     # A matrix title does not change the pasted cell picture.
-    grid = occupied_matrix([plain])
+    matrix = occupied_matrix([plain])
     titled_grid = PlotMatrix(
         name='Other Name',
         title='Quarterly sales by region',
         description='A grid subtitle.',
         rows=2,
         cols=2,
-        cells=grid.cells,
+        cells=matrix.cells,
     )
-    assert image_data(renderer.render_matrix(grid)) == image_data(
-        renderer.render_matrix(titled_grid),
+    assert image_data(renderer.render_matrix(matrix, 8, 6)) == image_data(
+        renderer.render_matrix(titled_grid, 8, 6),
     )
+
+# ** test: requested_size_changes_the_picture
+def test_requested_size_changes_the_picture(tmp_path, monkeypatch):
+    '''
+    Width 8 and height 4, and the swapped pair, are different pictures.
+    '''
+
+    # An unsaved record is enough. Render must not write a publication file.
+    monkeypatch.chdir(tmp_path)
+    plot = line_plot()
+    renderer = MatplotlibRenderer()
+    wide = renderer.render(plot, 8, 4)
+    tall = renderer.render(plot, 4, 8)
+
+    # The bytes are a PNG, and the requested extents are in the picture.
+    assert image_data(wide)
+    assert image_data(tall)
+    assert image_data(wide) != image_data(tall)
+    wide_px = png_size(wide)
+    tall_px = png_size(tall)
+    assert wide_px[0] > wide_px[1]
+    assert tall_px[1] > tall_px[0]
+    assert wide_px != tall_px
+    assert list(tmp_path.iterdir()) == []
+    assert 'width' not in type(plot).model_fields
+    assert 'height' not in type(plot).model_fields
+
+# ** test: omitted_or_illegal_size_returns_no_picture
+@pytest.mark.parametrize('width,height', [
+    (None, 4),
+    (8, None),
+    (0, 4),
+    (8, 0),
+    (-1, 4),
+    (8, -2),
+    (True, 4),
+    (False, 4),
+    (8, True),
+    ('8', 4),
+    (8, '6'),
+])
+def test_omitted_or_illegal_size_returns_no_picture(
+        width, height, monkeypatch, tmp_path):
+    '''
+    None, zero, a negative number, a bool, or text fails and returns no picture.
+    '''
+
+    # Drawing must not start. A file must not appear.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(renderer_module, 'Figure', refuse_figure)
+    plot = line_plot()
+    matrix = occupied_matrix([plot])
+
+    # The same failures apply to one plot and to the grid.
+    with pytest.raises(ValueError):
+        MatplotlibRenderer().render(plot, width, height)
+    with pytest.raises(ValueError):
+        MatplotlibRenderer().render_matrix(matrix, width, height)
+    assert list(tmp_path.iterdir()) == []
+
+# ** test: omitting_width_or_height_returns_no_picture
+@pytest.mark.parametrize('call', [
+    lambda renderer, plot, matrix: renderer.render(plot),
+    lambda renderer, plot, matrix: renderer.render(plot, 8),
+    lambda renderer, plot, matrix: renderer.render(plot, width=8),
+    lambda renderer, plot, matrix: renderer.render(plot, height=4),
+    lambda renderer, plot, matrix: renderer.render_matrix(matrix),
+    lambda renderer, plot, matrix: renderer.render_matrix(matrix, 8),
+    lambda renderer, plot, matrix: renderer.render_matrix(matrix, width=8),
+    lambda renderer, plot, matrix: renderer.render_matrix(matrix, height=6),
+])
+def test_omitting_width_or_height_returns_no_picture(call, monkeypatch):
+    '''
+    A missing width or height fails. There is no default picture size.
+    '''
+
+    # The call fails before a figure exists.
+    monkeypatch.setattr(renderer_module, 'Figure', refuse_figure)
+    renderer = MatplotlibRenderer()
+    with pytest.raises(TypeError):
+        call(renderer, line_plot(), occupied_matrix([line_plot()]))
+
+# ** test: matrix_picture_is_one_requested_size
+def test_matrix_picture_is_one_requested_size(monkeypatch):
+    '''
+    One pair sizes the grid picture. Rows and columns do not.
+    '''
+
+    # Record every figure size. A cell call must not use a different pair.
+    seen = []
+    real_figure = renderer_module.Figure
+
+    def spy(*args, **kwargs):
+        '''
+        Record the figure size and delegate.
+
+        :param args: Figure arguments.
+        :type args: tuple
+        :param kwargs: Figure keyword arguments.
+        :type kwargs: dict
+        :return: The figure.
+        :rtype: Any
+        '''
+
+        # The drawing tool receives inches. It does not receive a resolution.
+        assert 'dpi' not in kwargs
+        seen.append(kwargs.get('figsize'))
+        return real_figure(*args, **kwargs)
+
+    monkeypatch.setattr(renderer_module, 'Figure', spy)
+    renderer = MatplotlibRenderer()
+    one = grid(1, 1)
+    two = grid(2, 2, [line_plot(), line_plot(y=(30, 40))])
+
+    # The same pair is the same requested size on a 1 by 1 and a 2 by 2.
+    first = renderer.render_matrix(one, 8, 6)
+    one_sizes = list(seen)
+    seen.clear()
+    second = renderer.render_matrix(two, 8, 6)
+    two_sizes = list(seen)
+    other = renderer.render_matrix(two, 5, 7)
+
+    # One non-empty PNG. A different pair is a different picture.
+    assert image_data(first)
+    assert image_data(second)
+    assert image_data(other)
+    assert image_data(second) != image_data(other)
+    assert png_size(first) == png_size(second)
+    assert png_size(second) != png_size(other)
+    assert one_sizes == [(8, 6), (8, 6)]
+    assert two_sizes == [(8, 6), (8, 6), (8, 6)]
+    assert (4, 3) not in one_sizes
+    source = Path(renderer_module.__file__).read_text()
+    assert '4 * cols' not in source
+    assert '3 * rows' not in source

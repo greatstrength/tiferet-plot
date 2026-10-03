@@ -150,6 +150,10 @@ def test_declaration_derives_ids_and_excludes_renderer_and_store():
     assert 'renderer' not in Plot.model_fields
     assert 'file_path' not in Plot.model_fields
     assert 'database' not in Plot.model_fields
+    assert 'width' not in Plot.model_fields
+    assert 'height' not in Plot.model_fields
+    assert 'width' not in Series.model_fields
+    assert 'height' not in Series.model_fields
 
 # ** test: supplied_plot_id_is_kept
 def test_supplied_plot_id_is_kept():
@@ -447,6 +451,8 @@ def test_duplicate_series_ids_fail():
     {'renderer': 'matplotlib'},
     {'file_path': 'plot.yaml'},
     {'database': 'plots'},
+    {'width': 8},
+    {'height': 4},
 ])
 def test_renderer_and_store_fields_are_rejected(extra):
     '''
@@ -531,6 +537,10 @@ def test_matrix_declaration_derives_id_and_keeps_the_cell_plot():
     assert 'marks' not in PlotMatrix.model_fields
     assert 'renderer' not in PlotMatrix.model_fields
     assert 'file_path' not in PlotMatrix.model_fields
+    assert 'width' not in PlotMatrix.model_fields
+    assert 'height' not in PlotMatrix.model_fields
+    assert 'width' not in MatrixCell.model_fields
+    assert 'height' not in MatrixCell.model_fields
 
 # ** test: matrix_id_follows_the_plot_rule
 def test_matrix_id_follows_the_plot_rule():

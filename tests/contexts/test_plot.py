@@ -21,12 +21,12 @@ from tiferet_plot.contexts.plot import (
     CREATE_MATRIX_EVENT_ID,
     CREATE_PLOT_EVENT_ID,
     PLOT_FLAG,
-    RENDERER_SERVICE_ID,
     UPDATE_PLOT_EVENT_ID,
     PlotterSessionContext,
     create_handler,
-    show_handler,
 )
+from tiferet_plot.events.plot import CreateMatrix, CreatePlot, UpdatePlot
+from tiferet_plot.interfaces.plot import MatrixService, PlotService
 from tiferet_plot.domain.plot import (
     Mark,
     MatrixCell,
@@ -76,10 +76,12 @@ class RecordingEvent:
         self.kwargs = kwargs
         return self.result
 
-# ** class: recording_renderer
-class RecordingRenderer:
+# ** class: recording_show_handler
+class RecordingShowHandler:
     '''
-    A renderer stand-in that records which picture method was called.
+    A show-handler stand-in that records the record and the size it received.
+
+    The handler itself is a blueprint. The session only has to call it.
     '''
 
     # * init
@@ -88,38 +90,27 @@ class RecordingRenderer:
         Start with no picture calls.
         '''
 
-        # The method name proves plot and matrix do not share a drawing call.
+        # Each call proves what the session forwarded.
         self.calls = []
 
-    # * method: render
-    def render(self, plot) -> bytes:
+    # * method: __call__
+    def __call__(self, record, width, height) -> bytes:
         '''
-        Record a plot picture call.
+        Record the call and return sentinel picture bytes.
 
-        :param plot: The plot record.
-        :type plot: Any
+        :param record: The plot or matrix record.
+        :type record: Any
+        :param width: The picture width passed through.
+        :type width: float
+        :param height: The picture height passed through.
+        :type height: float
         :return: Sentinel picture bytes.
         :rtype: bytes
         '''
 
-        # Return bytes. Do not write a file.
-        self.calls.append(('render', plot))
-        return b'plot-png'
-
-    # * method: render_matrix
-    def render_matrix(self, matrix) -> bytes:
-        '''
-        Record a matrix picture call.
-
-        :param matrix: The matrix record.
-        :type matrix: Any
-        :return: Sentinel picture bytes.
-        :rtype: bytes
-        '''
-
-        # Return bytes. Do not write a file.
-        self.calls.append(('render_matrix', matrix))
-        return b'matrix-png'
+        # Return bytes. The session does not read a size from the record.
+        self.calls.append((record, width, height))
+        return b'picture-png'
 
 # *** functions
 
@@ -361,6 +352,8 @@ def test_context_extends_the_hub_and_omits_domain_type():
     assert not hasattr(context_module, 'PlotterFluentContext')
     assert not hasattr(PlotterSessionContext, 'show_line')
     assert not hasattr(PlotterSessionContext, 'show_bar')
+    assert not hasattr(PlotterSessionContext, 'show_matrix')
+    assert not hasattr(context_module, 'show_matrix')
     assert not (Path(context_module.__file__).parent / 'fluent.py').exists()
 
 # ** test: unwired_handlers_fail
@@ -378,7 +371,7 @@ def test_unwired_handlers_fail():
     assert 'plotter' in caught.value.message
 
     with pytest.raises(TiferetAPIError) as caught:
-        session.show(plot)
+        session.show(plot, 8, 4)
     assert 'show_handler' in caught.value.message
 
     # The five framework handlers are still required.
@@ -421,41 +414,77 @@ def test_create_calls_the_plot_or_matrix_event():
     assert matrix_event.kwargs['cells'] == grid.cells
     assert matrix_event.kwargs['id'] == grid.id
 
-# ** test: show_calls_render_or_render_matrix_on_the_plot_flag
-def test_show_calls_render_or_render_matrix_on_the_plot_flag():
+# ** test: show_forwards_the_record_and_the_size_to_the_handler
+def test_show_forwards_the_record_and_the_size_to_the_handler():
     '''
-    Show of a plot calls render. Show of a matrix calls render_matrix.
+    Show passes the record and the caller's pair to the injected handler.
     '''
 
-    # One renderer. The flag is plot, not the framework flag.
+    # The handler is injected. The session does not resolve the renderer.
     plot = line_plot()
     bar = line_plot(kind='bar', plot_id='sales_bar')
     grid = matrix()
-    renderer = RecordingRenderer()
-    get_dependency, calls = resolver({
-        RENDERER_SERVICE_ID: renderer,
-    })
-    session = bound(show=show_handler(get_dependency))
+    handler = RecordingShowHandler()
+    session = bound(show=handler)
 
-    # A line and a bar use the same show, and the same render call.
-    assert session.show(plot) == b'plot-png'
-    assert session.show(bar) == b'plot-png'
-    assert renderer.calls == [('render', plot), ('render', bar)]
-    assert calls == [
-        (RENDERER_SERVICE_ID, (PLOT_FLAG,)),
-        (RENDERER_SERVICE_ID, (PLOT_FLAG,)),
+    # A line, a bar, and a matrix all go through the one handler.
+    assert session.show(plot, 8, 4) == b'picture-png'
+    assert session.show(bar, 4, 8) == b'picture-png'
+    assert session.show(grid, 8, 6) == b'picture-png'
+    assert handler.calls == [
+        (plot, 8, 4),
+        (bar, 4, 8),
+        (grid, 8, 6),
     ]
-    assert all(flag != ('app',) for _, flag in calls)
 
-    # A matrix is the other method. It is not a fourth kind.
-    assert session.show(grid) == b'matrix-png'
-    assert renderer.calls[-1] == ('render_matrix', grid)
-    assert calls[-1] == (RENDERER_SERVICE_ID, (PLOT_FLAG,))
+    # Show forwards the pair. It does not default it or keep it.
+    signature = inspect.signature(PlotterSessionContext.show)
+    assert list(signature.parameters) == ['self', 'record', 'width', 'height']
+    assert signature.parameters['width'].default is inspect.Parameter.empty
+    assert signature.parameters['height'].default is inspect.Parameter.empty
+    assert not hasattr(session, 'width')
 
-# ** test: a_non_record_is_not_created_or_shown
-def test_a_non_record_is_not_created_or_shown():
+# ** test: declaring_and_keeping_do_not_take_a_size
+def test_declaring_and_keeping_do_not_take_a_size():
     '''
-    Create and show do not invent a record from something else.
+    The chain, the events, and the keep contracts do not take width or height.
+    '''
+
+    # The chain declares a record. A picture size is not part of that call.
+    for method in (
+        PlotterSessionContext.draft,
+        PlotterSessionContext.edit,
+        PlotterSessionContext.add_series,
+        PlotterSessionContext.append,
+        PlotterSessionContext.create,
+        PlotterSessionContext.update,
+    ):
+        names = inspect.signature(method).parameters
+        assert 'width' not in names
+        assert 'height' not in names
+
+    # Create, update, and the keep contracts carry the record, not a size.
+    for method in (
+        CreatePlot.execute,
+        UpdatePlot.execute,
+        CreateMatrix.execute,
+        PlotService.save,
+        PlotService.update,
+        MatrixService.save,
+        MatrixService.update,
+    ):
+        names = inspect.signature(method).parameters
+        assert 'width' not in names
+        assert 'height' not in names
+
+    # The record has no size to read back.
+    assert not hasattr(line_plot(), 'width')
+    assert not hasattr(matrix(), 'height')
+
+# ** test: a_non_record_is_not_created
+def test_a_non_record_is_not_created():
+    '''
+    Create does not invent a record from something else.
     '''
 
     # Resolution must not run. The caller did not pass a finished record.
@@ -472,14 +501,9 @@ def test_a_non_record_is_not_created_or_shown():
         # A non-record is rejected before any service is resolved.
         raise AssertionError('resolved a service for a non-record')
 
-    session = bound(
-        create=create_handler(get_dependency),
-        show=show_handler(get_dependency),
-    )
+    session = bound(create=create_handler(get_dependency))
     with pytest.raises(AttributeError):
         session.create(object())
-    with pytest.raises(AttributeError):
-        session.show({'name': 'Sales by Region'})
 
 # ** test: session_does_not_import_the_drawing_tool_or_a_store
 def test_session_does_not_import_the_drawing_tool_or_a_store():
@@ -1092,17 +1116,13 @@ def test_show_does_not_read_or_drop_an_open_draft():
     show of an explicit plot, while a draft is open, returns that picture.
     '''
 
-    # The renderer sees the explicit plot. The draft stays open.
+    # The handler sees the explicit plot. The draft stays open.
     explicit = line_plot(plot_id='explicit')
-    renderer = RecordingRenderer()
-    get_dependency, calls = resolver({
-        RENDERER_SERVICE_ID: renderer,
-    })
-    session = bound(show=show_handler(get_dependency))
+    handler = RecordingShowHandler()
+    session = bound(show=handler)
     session.draft('Draft Name', 'line')
-    assert session.show(explicit) == b'plot-png'
-    assert renderer.calls == [('render', explicit)]
-    assert calls == [(RENDERER_SERVICE_ID, (PLOT_FLAG,))]
+    assert session.show(explicit, 8, 4) == b'picture-png'
+    assert handler.calls == [(explicit, 8, 4)]
     with pytest.raises(ValueError):
         session.draft('Other', 'line')
 
