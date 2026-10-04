@@ -338,6 +338,8 @@ def _require_picture_size(width, height, model=None) -> None:
     :type width: Any
     :param height: The picture height.
     :type height: Any
+    :param model: The record the refusal is raised against, if any.
+    :type model: Any
     :return: None
     :rtype: None
     '''
@@ -442,29 +444,6 @@ def _font_family(plot) -> str:
     # One family covers the picture. A second family is not introduced.
     return family
 
-# ** function: _figure_title
-def _figure_title(plot) -> str:
-    '''
-    Return the axes title this picture draws.
-
-    The reading is ``title`` when it is present and not blank, otherwise
-    the catalog name. The name is not written into ``title``. The id is
-    not the title.
-
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :return: The title text.
-    :rtype: str
-    '''
-
-    # A present title is the text. The catalog name is not also a title.
-    title = _present(getattr(plot, 'title', None))
-    if title is not None:
-        return title
-
-    # Absent title falls back for the picture only. The record stays absent.
-    return plot.name
-
 # ** function: _composed_label
 def _composed_label(title, unit):
     '''
@@ -508,6 +487,8 @@ def _role_sort(role: str, values, model=None) -> str:
     :type role: str
     :param values: The values that play the role.
     :type values: Sequence
+    :param model: The record the refusal is raised against, if any.
+    :type model: Any
     :return: ``numeric`` or ``text``.
     :rtype: str
     '''
@@ -576,6 +557,8 @@ def _drawable_marks(kind: str, marks, model=None) -> dict:
     :type kind: str
     :param marks: The series marks.
     :type marks: Sequence
+    :param model: The record the refusal is raised against, if any.
+    :type model: Any
     :return: Mark values keyed by role.
     :rtype: dict
     '''
@@ -716,6 +699,8 @@ def _tool_marker(token: str, model=None):
 
     :param token: The stored marker token.
     :type token: str
+    :param model: The record the refusal is raised against, if any.
+    :type model: Any
     :return: The tool code, or None when no marker is drawn.
     :rtype: str | None
     '''
@@ -1291,7 +1276,7 @@ def _draw_figure_text(figure, axes, plot) -> bool:
     # One family and the declared sizes. Absent sizes are not stored.
     family = _font_family(plot)
     title_size = _supplied(getattr(plot, 'title_size', None), DEFAULT_TITLE_SIZE)
-    subtitle = _present(getattr(plot, 'description', None))
+    subtitle = plot.subtitle_text
     subtitle_size = _supplied(
         getattr(plot, 'subtitle_size', None),
         DEFAULT_SUBTITLE_SIZE,
@@ -1302,7 +1287,7 @@ def _draw_figure_text(figure, axes, plot) -> bool:
 
     # The title is the axes title. The id is not drawn.
     axes.set_title(
-        _figure_title(plot),
+        plot.title_text,
         fontsize=title_size,
         fontfamily=family,
         pad=pad,

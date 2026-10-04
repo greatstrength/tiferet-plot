@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 # ** app
-import tiferet_plot
 from tiferet.domain import ModelError
+import tiferet_plot
 from tiferet_plot.domain.plot import (
     Mark,
     MatrixCell,

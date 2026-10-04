@@ -11,8 +11,8 @@ import pytest
 
 # ** app
 from tiferet import TiferetError
-from tiferet.domain import ModelError
 from tiferet.di import DIAppServiceContainer, DIDynamicServiceContainer
+from tiferet.domain import ModelError
 from tiferet.interfaces import ServiceError
 from tiferet_plot.blueprints.plot import create_plotter_session, show_handler
 from tiferet_plot.contexts.plot import (
