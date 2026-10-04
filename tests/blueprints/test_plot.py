@@ -12,6 +12,7 @@ import pytest
 # ** app
 from tiferet import TiferetError
 from tiferet.di import DIAppServiceContainer, DIDynamicServiceContainer
+from tiferet.domain import ModelError
 from tiferet.interfaces import ServiceError
 from tiferet_plot.blueprints.plot import create_plotter_session, show_handler
 from tiferet_plot.contexts.plot import (
@@ -34,6 +35,7 @@ from tiferet_plot.repos.plot import (
     MatrixConfigRepository,
     PlotConfigRepository,
 )
+from tiferet_plot.utils.plot import MatplotlibRenderer
 import tiferet_plot.blueprints.plot as blueprint_module
 
 # *** constants
@@ -408,9 +410,28 @@ def test_show_returns_png_bytes_and_does_not_write_a_file(tmp_path):
     # Show does not invent a size. A missing or illegal pair returns no picture.
     with pytest.raises(TypeError):
         session.show(created)
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         session.show(created, 0, 4)
     assert path.read_bytes() == before
+
+# ** test: show_returns_the_bytes_render_returns
+def test_show_returns_the_bytes_render_returns(tmp_path):
+    '''
+    show returns the bytes render returns for that pair. There is no show_matrix.
+    '''
+
+    # The session does not read a size from the record, and it does not write a file.
+    path = tmp_path / 'publication.yml'
+    session = create_plotter_session(plot_config=str(path))
+    plot = line_plot()
+    shown = session.show(plot, 8, 4)
+    rendered = MatplotlibRenderer().render(plot, 8, 4)
+
+    # The same pair is the same picture. A matrix method is not added here.
+    assert shown == rendered
+    assert not path.exists()
+    assert not hasattr(PlotterSessionContext, 'show_matrix')
+    assert 'width' not in type(plot).model_fields
 
 # ** test: chain_create_keeps_the_settled_ids
 def test_chain_create_keeps_the_settled_ids(tmp_path):
