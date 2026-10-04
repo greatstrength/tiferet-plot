@@ -174,6 +174,19 @@ def test_declaration_derives_ids_and_excludes_renderer_and_store():
         'y_title',
         'y_unit',
         'series',
+        'show_legend',
+        'legend_location',
+        'legend_title',
+        'title_size',
+        'subtitle_size',
+        'axis_label_size',
+        'tick_label_size',
+        'legend_size',
+        'x_tick_rotation',
+        'y_tick_rotation',
+        'x_tick_decimals',
+        'y_tick_decimals',
+        'font_family',
     }
     assert 'renderer' not in Plot.model_fields
     assert 'file_path' not in Plot.model_fields
@@ -566,6 +579,15 @@ def test_matrix_declaration_derives_id_and_keeps_the_cell_plot():
         'rows',
         'cols',
         'cells',
+        'show_legend',
+        'legend_location',
+        'legend_title',
+        'title_size',
+        'subtitle_size',
+        'legend_size',
+        'font_family',
+        'row_spacing',
+        'col_spacing',
     }
     assert 'kind' not in PlotMatrix.model_fields
     assert 'marks' not in PlotMatrix.model_fields
@@ -1058,7 +1080,7 @@ def test_text_on_line_derives_ids_from_the_names():
     assert plot.series[0].marks[1].values == (1, 2)
     assert plot.series[0].marks[2].values == ('run-1', 'run-2')
 
-    # Figure text stays. This record still has no drawing fields.
+    # Figure text stays. Appearance is on the record, not a mark role.
     # A mark is still a role and values.
     assert set(Plot.model_fields) == {
         'id',
@@ -1071,8 +1093,32 @@ def test_text_on_line_derives_ids_from_the_names():
         'y_title',
         'y_unit',
         'series',
+        'show_legend',
+        'legend_location',
+        'legend_title',
+        'title_size',
+        'subtitle_size',
+        'axis_label_size',
+        'tick_label_size',
+        'legend_size',
+        'x_tick_rotation',
+        'y_tick_rotation',
+        'x_tick_decimals',
+        'y_tick_decimals',
+        'font_family',
     }
-    assert set(Series.model_fields) == {'id', 'name', 'marks'}
+    assert set(Series.model_fields) == {
+        'id',
+        'name',
+        'marks',
+        'legend_label',
+        'color',
+        'linestyle',
+        'linewidth',
+        'marker',
+        'markersize',
+        'bar_width',
+    }
     assert set(Mark.model_fields) == {'role', 'values'}
     assert 'rotation' not in Plot.model_fields
     assert 'size' not in Plot.model_fields

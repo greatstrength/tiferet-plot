@@ -63,6 +63,19 @@ class CreatePlot(PlotEvent):
             x_unit: str | None = None,
             y_title: str | None = None,
             y_unit: str | None = None,
+            show_legend: bool | None = None,
+            legend_location: str | None = None,
+            legend_title: str | None = None,
+            title_size: int | float | None = None,
+            subtitle_size: int | float | None = None,
+            axis_label_size: int | float | None = None,
+            tick_label_size: int | float | None = None,
+            legend_size: int | float | None = None,
+            x_tick_rotation: int | float | None = None,
+            y_tick_rotation: int | float | None = None,
+            x_tick_decimals: int | None = None,
+            y_tick_decimals: int | None = None,
+            font_family: str | None = None,
             **kwargs,
         ) -> PlotAggregate:
         '''
@@ -71,6 +84,8 @@ class CreatePlot(PlotEvent):
         A missing id is the snake_case of the name. A supplied id is kept.
         Kind and marks are checked by that declaration. An id already kept
         fails before save. Title and axis text are not identity.
+        Appearance rides on these keywords and on the series. It does
+        not derive an id, and it does not draw.
 
         :param name: The author's name for the plot.
         :type name: str
@@ -92,6 +107,32 @@ class CreatePlot(PlotEvent):
         :type y_title: str | None
         :param y_unit: Optional unit of the y axis. Not used to derive the id.
         :type y_unit: str | None
+        :param show_legend: Optional legend flag. Omitted is not stored as true.
+        :type show_legend: bool | None
+        :param legend_location: Optional legend place.
+        :type legend_location: str | None
+        :param legend_title: Optional legend title. Blank is absent.
+        :type legend_title: str | None
+        :param title_size: Optional title size in points.
+        :type title_size: int | float | None
+        :param subtitle_size: Optional subtitle size in points.
+        :type subtitle_size: int | float | None
+        :param axis_label_size: Optional axis-label size in points.
+        :type axis_label_size: int | float | None
+        :param tick_label_size: Optional tick-label size in points.
+        :type tick_label_size: int | float | None
+        :param legend_size: Optional legend size in points.
+        :type legend_size: int | float | None
+        :param x_tick_rotation: Optional x tick rotation in degrees.
+        :type x_tick_rotation: int | float | None
+        :param y_tick_rotation: Optional y tick rotation in degrees.
+        :type y_tick_rotation: int | float | None
+        :param x_tick_decimals: Optional x decimal count. Zero is supplied.
+        :type x_tick_decimals: int | None
+        :param y_tick_decimals: Optional y decimal count. Zero is supplied.
+        :type y_tick_decimals: int | None
+        :param font_family: Optional font family.
+        :type font_family: str | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The kept plot record.
@@ -99,7 +140,7 @@ class CreatePlot(PlotEvent):
         :raises TiferetError: ``PLOT_ALREADY_KEPT`` when the id is already kept.
         '''
 
-        # Declare the record. Invalid kind or marks fail here, before save.
+        # Declare the record. Invalid kind, marks, or appearance fail here.
         plot = PlotAggregate(
             name=name,
             kind=kind,
@@ -111,6 +152,19 @@ class CreatePlot(PlotEvent):
             x_unit=x_unit,
             y_title=y_title,
             y_unit=y_unit,
+            show_legend=show_legend,
+            legend_location=legend_location,
+            legend_title=legend_title,
+            title_size=title_size,
+            subtitle_size=subtitle_size,
+            axis_label_size=axis_label_size,
+            tick_label_size=tick_label_size,
+            legend_size=legend_size,
+            x_tick_rotation=x_tick_rotation,
+            y_tick_rotation=y_tick_rotation,
+            x_tick_decimals=x_tick_decimals,
+            y_tick_decimals=y_tick_decimals,
+            font_family=font_family,
         )
 
         # An id already kept is the rejected second save. Do not call save.
@@ -211,15 +265,29 @@ class UpdatePlot(PlotEvent):
             x_unit: str | None = None,
             y_title: str | None = None,
             y_unit: str | None = None,
+            show_legend: bool | None = None,
+            legend_location: str | None = None,
+            legend_title: str | None = None,
+            title_size: int | float | None = None,
+            subtitle_size: int | float | None = None,
+            axis_label_size: int | float | None = None,
+            tick_label_size: int | float | None = None,
+            legend_size: int | float | None = None,
+            x_tick_rotation: int | float | None = None,
+            y_tick_rotation: int | float | None = None,
+            x_tick_decimals: int | None = None,
+            y_tick_decimals: int | None = None,
+            font_family: str | None = None,
             **kwargs,
         ) -> PlotAggregate:
         '''
         Replace a kept plot without changing its id.
 
         Kind and marks are checked again. An omitted description is no
-        description, not a merge with the kept record. An omitted title
-        or axis field is absent, not a merge. The id is the one the
-        caller already kept.
+        description, not a merge with the kept record. An omitted title,
+        axis field, or appearance field is absent, not a merge. The id
+        is the one the caller already kept. It is not derived from
+        appearance.
 
         :param id: The kept plot id. Not derived from the name.
         :type id: str
@@ -227,7 +295,7 @@ class UpdatePlot(PlotEvent):
         :type name: str
         :param kind: The replacement kind.
         :type kind: str
-        :param series: The replacement series.
+        :param series: The replacement series. Style rides on each series.
         :type series: list
         :param description: The replacement claim text, if any.
         :type description: str | None
@@ -241,6 +309,32 @@ class UpdatePlot(PlotEvent):
         :type y_title: str | None
         :param y_unit: The replacement y-axis unit, if any.
         :type y_unit: str | None
+        :param show_legend: The replacement legend flag. Omitted clears it.
+        :type show_legend: bool | None
+        :param legend_location: The replacement legend place. Omitted clears it.
+        :type legend_location: str | None
+        :param legend_title: The replacement legend title. Omitted clears it.
+        :type legend_title: str | None
+        :param title_size: The replacement title size. Omitted clears it.
+        :type title_size: int | float | None
+        :param subtitle_size: The replacement subtitle size. Omitted clears it.
+        :type subtitle_size: int | float | None
+        :param axis_label_size: The replacement axis-label size. Omitted clears it.
+        :type axis_label_size: int | float | None
+        :param tick_label_size: The replacement tick-label size. Omitted clears it.
+        :type tick_label_size: int | float | None
+        :param legend_size: The replacement legend size. Omitted clears it.
+        :type legend_size: int | float | None
+        :param x_tick_rotation: The replacement x rotation. Omitted clears it.
+        :type x_tick_rotation: int | float | None
+        :param y_tick_rotation: The replacement y rotation. Omitted clears it.
+        :type y_tick_rotation: int | float | None
+        :param x_tick_decimals: The replacement x decimals. Omitted clears it.
+        :type x_tick_decimals: int | None
+        :param y_tick_decimals: The replacement y decimals. Omitted clears it.
+        :type y_tick_decimals: int | None
+        :param font_family: The replacement font family. Omitted clears it.
+        :type font_family: str | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The replacement record.
@@ -260,6 +354,19 @@ class UpdatePlot(PlotEvent):
             x_unit=x_unit,
             y_title=y_title,
             y_unit=y_unit,
+            show_legend=show_legend,
+            legend_location=legend_location,
+            legend_title=legend_title,
+            title_size=title_size,
+            subtitle_size=subtitle_size,
+            axis_label_size=axis_label_size,
+            tick_label_size=tick_label_size,
+            legend_size=legend_size,
+            x_tick_rotation=x_tick_rotation,
+            y_tick_rotation=y_tick_rotation,
+            x_tick_decimals=x_tick_decimals,
+            y_tick_decimals=y_tick_decimals,
+            font_family=font_family,
         )
 
         # Replace the kept record. A missing id fails and does not insert.
@@ -340,6 +447,15 @@ class CreateMatrix(MatrixEvent):
             description: str | None = None,
             *,
             title: str | None = None,
+            show_legend: bool | None = None,
+            legend_location: str | None = None,
+            legend_title: str | None = None,
+            title_size: int | float | None = None,
+            subtitle_size: int | float | None = None,
+            legend_size: int | float | None = None,
+            font_family: str | None = None,
+            row_spacing: int | float | None = None,
+            col_spacing: int | float | None = None,
             **kwargs,
         ) -> PlotMatrixAggregate:
         '''
@@ -348,6 +464,8 @@ class CreateMatrix(MatrixEvent):
         An id already kept fails before save and leaves the first matrix
         unchanged. Save failing because the id exists is that same failure.
         Title is not identity. A matrix has no axis text.
+        Grid appearance rides on these keywords. Series style stays on
+        the cell plots. This event does not take a color.
 
         :param name: The author's name for the matrix.
         :type name: str
@@ -363,13 +481,31 @@ class CreateMatrix(MatrixEvent):
         :type description: str | None
         :param title: Optional display title of the grid. Not used to derive the id.
         :type title: str | None
+        :param show_legend: Optional grid-legend flag. Omitted is not false.
+        :type show_legend: bool | None
+        :param legend_location: Optional grid-legend place.
+        :type legend_location: str | None
+        :param legend_title: Optional grid-legend title. Blank is absent.
+        :type legend_title: str | None
+        :param title_size: Optional grid-title size in points.
+        :type title_size: int | float | None
+        :param subtitle_size: Optional grid-subtitle size in points.
+        :type subtitle_size: int | float | None
+        :param legend_size: Optional grid-legend size in points.
+        :type legend_size: int | float | None
+        :param font_family: Optional grid font family.
+        :type font_family: str | None
+        :param row_spacing: Optional row gap. Zero is supplied.
+        :type row_spacing: int | float | None
+        :param col_spacing: Optional column gap. Zero is supplied.
+        :type col_spacing: int | float | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The kept matrix.
         :rtype: PlotMatrixAggregate
         '''
 
-        # Declare the grid. A bad cell fails here and is not saved.
+        # Declare the grid. A bad cell or a disagreeing legend fails here.
         matrix = PlotMatrixAggregate(
             name=name,
             rows=rows,
@@ -378,6 +514,15 @@ class CreateMatrix(MatrixEvent):
             id=id,
             description=description,
             title=title,
+            show_legend=show_legend,
+            legend_location=legend_location,
+            legend_title=legend_title,
+            title_size=title_size,
+            subtitle_size=subtitle_size,
+            legend_size=legend_size,
+            font_family=font_family,
+            row_spacing=row_spacing,
+            col_spacing=col_spacing,
         )
 
         # An id already kept is the same failure as a rejected save.
@@ -472,13 +617,25 @@ class UpdateMatrix(MatrixEvent):
             description: str | None = None,
             *,
             title: str | None = None,
+            show_legend: bool | None = None,
+            legend_location: str | None = None,
+            legend_title: str | None = None,
+            title_size: int | float | None = None,
+            subtitle_size: int | float | None = None,
+            legend_size: int | float | None = None,
+            font_family: str | None = None,
+            row_spacing: int | float | None = None,
+            col_spacing: int | float | None = None,
             **kwargs,
         ) -> PlotMatrixAggregate:
         '''
         Re-declare a kept matrix and replace it.
 
         An omitted title is no title, not a merge with the kept record.
-        The id is not derived from the title.
+        The id is not derived from the title. An omitted appearance
+        field clears it. Setting the grid legend re-declares the union.
+        A disagreement fails before update, so the kept matrix is
+        unchanged.
 
         :param id: The matrix id already kept. Not recomputed from the name.
         :type id: str
@@ -494,6 +651,24 @@ class UpdateMatrix(MatrixEvent):
         :type description: str | None
         :param title: The replacement display title, if any. Not identity.
         :type title: str | None
+        :param show_legend: The replacement grid-legend flag. Omitted clears it.
+        :type show_legend: bool | None
+        :param legend_location: The replacement legend place. Omitted clears it.
+        :type legend_location: str | None
+        :param legend_title: The replacement legend title. Omitted clears it.
+        :type legend_title: str | None
+        :param title_size: The replacement grid-title size. Omitted clears it.
+        :type title_size: int | float | None
+        :param subtitle_size: The replacement grid-subtitle size. Omitted clears it.
+        :type subtitle_size: int | float | None
+        :param legend_size: The replacement grid-legend size. Omitted clears it.
+        :type legend_size: int | float | None
+        :param font_family: The replacement font family. Omitted clears it.
+        :type font_family: str | None
+        :param row_spacing: The replacement row gap. Omitted clears it.
+        :type row_spacing: int | float | None
+        :param col_spacing: The replacement column gap. Omitted clears it.
+        :type col_spacing: int | float | None
         :param kwargs: Additional keyword arguments.
         :type kwargs: dict
         :return: The replacement matrix.
@@ -509,6 +684,15 @@ class UpdateMatrix(MatrixEvent):
             cells=cells,
             description=description,
             title=title,
+            show_legend=show_legend,
+            legend_location=legend_location,
+            legend_title=legend_title,
+            title_size=title_size,
+            subtitle_size=subtitle_size,
+            legend_size=legend_size,
+            font_family=font_family,
+            row_spacing=row_spacing,
+            col_spacing=col_spacing,
         )
 
         # A missing id fails before update and does not insert.

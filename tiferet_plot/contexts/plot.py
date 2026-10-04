@@ -131,6 +131,15 @@ def create_handler(get_dependency: Callable) -> Callable:
                 id=record.id,
                 description=record.description,
                 title=record.title,
+                show_legend=record.show_legend,
+                legend_location=record.legend_location,
+                legend_title=record.legend_title,
+                title_size=record.title_size,
+                subtitle_size=record.subtitle_size,
+                legend_size=record.legend_size,
+                font_family=record.font_family,
+                row_spacing=record.row_spacing,
+                col_spacing=record.col_spacing,
             )
 
         # A line and a bar share this event. Kind is an argument, not a method.
@@ -146,6 +155,19 @@ def create_handler(get_dependency: Callable) -> Callable:
             x_unit=record.x_unit,
             y_title=record.y_title,
             y_unit=record.y_unit,
+            show_legend=record.show_legend,
+            legend_location=record.legend_location,
+            legend_title=record.legend_title,
+            title_size=record.title_size,
+            subtitle_size=record.subtitle_size,
+            axis_label_size=record.axis_label_size,
+            tick_label_size=record.tick_label_size,
+            legend_size=record.legend_size,
+            x_tick_rotation=record.x_tick_rotation,
+            y_tick_rotation=record.y_tick_rotation,
+            x_tick_decimals=record.x_tick_decimals,
+            y_tick_decimals=record.y_tick_decimals,
+            font_family=record.font_family,
         )
 
     # Return the closure.
@@ -214,7 +236,80 @@ def _copy_series(series: Series, marks: List[Mark] = None) -> Series:
         id=series.id,
         name=series.name,
         marks=marks,
+        legend_label=series.legend_label,
+        color=series.color,
+        linestyle=series.linestyle,
+        linewidth=series.linewidth,
+        marker=series.marker,
+        markersize=series.markersize,
+        bar_width=series.bar_width,
     )
+
+# ** function: _plot_appearance
+def _plot_appearance(show_legend: Any = None,
+        legend_location: Any = None,
+        legend_title: Any = None,
+        title_size: Any = None,
+        subtitle_size: Any = None,
+        axis_label_size: Any = None,
+        tick_label_size: Any = None,
+        legend_size: Any = None,
+        x_tick_rotation: Any = None,
+        y_tick_rotation: Any = None,
+        x_tick_decimals: Any = None,
+        y_tick_decimals: Any = None,
+        font_family: Any = None) -> Dict[str, Any]:
+    '''
+    Collect the plot appearance fields the chain must pass through.
+
+    Omitted values stay absent. This does not fill a drawer default.
+
+    :param show_legend: The legend flag, if supplied.
+    :type show_legend: Any
+    :param legend_location: The legend place, if supplied.
+    :type legend_location: Any
+    :param legend_title: The legend title, if supplied.
+    :type legend_title: Any
+    :param title_size: The title size, if supplied.
+    :type title_size: Any
+    :param subtitle_size: The subtitle size, if supplied.
+    :type subtitle_size: Any
+    :param axis_label_size: The axis-label size, if supplied.
+    :type axis_label_size: Any
+    :param tick_label_size: The tick-label size, if supplied.
+    :type tick_label_size: Any
+    :param legend_size: The legend size, if supplied.
+    :type legend_size: Any
+    :param x_tick_rotation: The x tick rotation, if supplied.
+    :type x_tick_rotation: Any
+    :param y_tick_rotation: The y tick rotation, if supplied.
+    :type y_tick_rotation: Any
+    :param x_tick_decimals: The x decimal count, if supplied.
+    :type x_tick_decimals: Any
+    :param y_tick_decimals: The y decimal count, if supplied.
+    :type y_tick_decimals: Any
+    :param font_family: The font family, if supplied.
+    :type font_family: Any
+    :return: The appearance fields.
+    :rtype: Dict[str, Any]
+    '''
+
+    # Keep every field, including an omitted one, so a later call can clear it.
+    return {
+        'show_legend': show_legend,
+        'legend_location': legend_location,
+        'legend_title': legend_title,
+        'title_size': title_size,
+        'subtitle_size': subtitle_size,
+        'axis_label_size': axis_label_size,
+        'tick_label_size': tick_label_size,
+        'legend_size': legend_size,
+        'x_tick_rotation': x_tick_rotation,
+        'y_tick_rotation': y_tick_rotation,
+        'x_tick_decimals': x_tick_decimals,
+        'y_tick_decimals': y_tick_decimals,
+        'font_family': font_family,
+    }
 
 # ** function: _declare_plot
 def _declare_plot(plot_id: str,
@@ -222,6 +317,8 @@ def _declare_plot(plot_id: str,
         kind: str,
         description: Any,
         series: List[Series],
+        appearance: Dict[str, Any],
+        *,
         title: Any = None,
         x_title: Any = None,
         x_unit: Any = None,
@@ -230,8 +327,8 @@ def _declare_plot(plot_id: str,
     '''
     Declare the in-memory record again, passing settled ids through.
 
-    Title and axis text are passed through. They are not used to derive
-    the id, and a later series does not clear them.
+    Title, axis text, and appearance are passed through. They are not
+    used to derive the id, and a drawer default is not written back.
 
     :param plot_id: The plot id already settled. Not derived again.
     :type plot_id: str
@@ -243,6 +340,8 @@ def _declare_plot(plot_id: str,
     :type description: Any
     :param series: The series, each with its id already settled.
     :type series: List[Series]
+    :param appearance: The plot appearance fields already settled.
+    :type appearance: Dict[str, Any]
     :param title: The optional display title. Not used to derive the id.
     :type title: Any
     :param x_title: The optional x-axis title.
@@ -257,7 +356,7 @@ def _declare_plot(plot_id: str,
     :rtype: Plot
     '''
 
-    # The supplied plot id is kept. Series ids were passed through.
+    # The supplied plot id is kept. Series style was copied with each series.
     return Plot(
         id=plot_id,
         name=name,
@@ -269,6 +368,19 @@ def _declare_plot(plot_id: str,
         x_unit=x_unit,
         y_title=y_title,
         y_unit=y_unit,
+        show_legend=appearance['show_legend'],
+        legend_location=appearance['legend_location'],
+        legend_title=appearance['legend_title'],
+        title_size=appearance['title_size'],
+        subtitle_size=appearance['subtitle_size'],
+        axis_label_size=appearance['axis_label_size'],
+        tick_label_size=appearance['tick_label_size'],
+        legend_size=appearance['legend_size'],
+        x_tick_rotation=appearance['x_tick_rotation'],
+        y_tick_rotation=appearance['y_tick_rotation'],
+        x_tick_decimals=appearance['x_tick_decimals'],
+        y_tick_decimals=appearance['y_tick_decimals'],
+        font_family=appearance['font_family'],
     )
 
 # ** function: _own_plot
@@ -299,6 +411,21 @@ def _own_plot(plot: Any) -> Plot:
             _copy_series(item)
             for item in plot.series
         ],
+        _plot_appearance(
+            show_legend=plot.show_legend,
+            legend_location=plot.legend_location,
+            legend_title=plot.legend_title,
+            title_size=plot.title_size,
+            subtitle_size=plot.subtitle_size,
+            axis_label_size=plot.axis_label_size,
+            tick_label_size=plot.tick_label_size,
+            legend_size=plot.legend_size,
+            x_tick_rotation=plot.x_tick_rotation,
+            y_tick_rotation=plot.y_tick_rotation,
+            x_tick_decimals=plot.x_tick_decimals,
+            y_tick_decimals=plot.y_tick_decimals,
+            font_family=plot.font_family,
+        ),
         title=plot.title,
         x_title=plot.x_title,
         x_unit=plot.x_unit,
@@ -447,6 +574,21 @@ class PlotterSessionContext(AppSessionContext):
         # The settled plot id is not rewritten from the name.
         self._open['series'] = list(record.series)
         self._open['record'] = record
+        self._open['appearance'] = _plot_appearance(
+            show_legend=record.show_legend,
+            legend_location=record.legend_location,
+            legend_title=record.legend_title,
+            title_size=record.title_size,
+            subtitle_size=record.subtitle_size,
+            axis_label_size=record.axis_label_size,
+            tick_label_size=record.tick_label_size,
+            legend_size=record.legend_size,
+            x_tick_rotation=record.x_tick_rotation,
+            y_tick_rotation=record.y_tick_rotation,
+            x_tick_decimals=record.x_tick_decimals,
+            y_tick_decimals=record.y_tick_decimals,
+            font_family=record.font_family,
+        )
 
     # * method: draft
     def draft(self,
@@ -459,13 +601,26 @@ class PlotterSessionContext(AppSessionContext):
             x_title: str = None,
             x_unit: str = None,
             y_title: str = None,
-            y_unit: str = None) -> 'PlotterSessionContext':
+            y_unit: str = None,
+            show_legend: bool = None,
+            legend_location: str = None,
+            legend_title: str = None,
+            title_size: float = None,
+            subtitle_size: float = None,
+            axis_label_size: float = None,
+            tick_label_size: float = None,
+            legend_size: float = None,
+            x_tick_rotation: float = None,
+            y_tick_rotation: float = None,
+            x_tick_decimals: int = None,
+            y_tick_decimals: int = None,
+            font_family: str = None) -> 'PlotterSessionContext':
         '''
         Open one in-memory plot with no series.
 
         A missing or blank id is derived once from the name. A supplied
-        id is kept. An empty derivation opens nothing. Title is a keyword
-        and does not shift the id argument.
+        id is kept. An empty derivation opens nothing. Title and
+        appearance are keywords and do not shift the id argument.
 
         :param name: The author's name for the plot.
         :type name: str
@@ -485,6 +640,32 @@ class PlotterSessionContext(AppSessionContext):
         :type y_title: str
         :param y_unit: Optional unit of the y axis.
         :type y_unit: str
+        :param show_legend: Optional legend flag. Omitted is not stored as true.
+        :type show_legend: bool
+        :param legend_location: Optional legend place.
+        :type legend_location: str
+        :param legend_title: Optional legend title. Blank is absent.
+        :type legend_title: str
+        :param title_size: Optional title size in points.
+        :type title_size: float
+        :param subtitle_size: Optional subtitle size in points.
+        :type subtitle_size: float
+        :param axis_label_size: Optional axis-label size in points.
+        :type axis_label_size: float
+        :param tick_label_size: Optional tick-label size in points.
+        :type tick_label_size: float
+        :param legend_size: Optional legend size in points.
+        :type legend_size: float
+        :param x_tick_rotation: Optional x tick rotation in degrees.
+        :type x_tick_rotation: float
+        :param y_tick_rotation: Optional y tick rotation in degrees.
+        :type y_tick_rotation: float
+        :param x_tick_decimals: Optional x decimal count.
+        :type x_tick_decimals: int
+        :param y_tick_decimals: Optional y decimal count.
+        :type y_tick_decimals: int
+        :param font_family: Optional font family.
+        :type font_family: str
         :return: This session, for further chaining.
         :rtype: PlotterSessionContext
         '''
@@ -505,6 +686,21 @@ class PlotterSessionContext(AppSessionContext):
             'x_unit': x_unit,
             'y_title': y_title,
             'y_unit': y_unit,
+            'appearance': _plot_appearance(
+                show_legend=show_legend,
+                legend_location=legend_location,
+                legend_title=legend_title,
+                title_size=title_size,
+                subtitle_size=subtitle_size,
+                axis_label_size=axis_label_size,
+                tick_label_size=tick_label_size,
+                legend_size=legend_size,
+                x_tick_rotation=x_tick_rotation,
+                y_tick_rotation=y_tick_rotation,
+                x_tick_decimals=x_tick_decimals,
+                y_tick_decimals=y_tick_decimals,
+                font_family=font_family,
+            ),
             'series': [],
             'record': None,
         }
@@ -542,6 +738,21 @@ class PlotterSessionContext(AppSessionContext):
             'x_unit': record.x_unit,
             'y_title': record.y_title,
             'y_unit': record.y_unit,
+            'appearance': _plot_appearance(
+                show_legend=record.show_legend,
+                legend_location=record.legend_location,
+                legend_title=record.legend_title,
+                title_size=record.title_size,
+                subtitle_size=record.subtitle_size,
+                axis_label_size=record.axis_label_size,
+                tick_label_size=record.tick_label_size,
+                legend_size=record.legend_size,
+                x_tick_rotation=record.x_tick_rotation,
+                y_tick_rotation=record.y_tick_rotation,
+                x_tick_decimals=record.x_tick_decimals,
+                y_tick_decimals=record.y_tick_decimals,
+                font_family=record.font_family,
+            ),
             'series': list(record.series),
             'record': record,
         }
@@ -553,7 +764,15 @@ class PlotterSessionContext(AppSessionContext):
     def add_series(self,
             name: str,
             marks: Any,
-            id: str = None) -> 'PlotterSessionContext':
+            id: str = None,
+            *,
+            legend_label: str = None,
+            color: str = None,
+            linestyle: str = None,
+            linewidth: float = None,
+            marker: str = None,
+            markersize: float = None,
+            bar_width: float = None) -> 'PlotterSessionContext':
         '''
         Add one series to the open plot.
 
@@ -561,7 +780,8 @@ class PlotterSessionContext(AppSessionContext):
         include label, and x or y may be text, when the plot's sort
         rules hold. A missing or blank series id is derived once from
         the series name. A supplied series id is kept. The plot id is
-        not recomputed.
+        not recomputed. Series style is optional keywords. It does not
+        shift the series id, and it does not clear plot appearance.
 
         :param name: The author's name for the series.
         :type name: str
@@ -569,6 +789,20 @@ class PlotterSessionContext(AppSessionContext):
         :type marks: Any
         :param id: The series id. Derived from the name when omitted.
         :type id: str
+        :param legend_label: Optional legend text. Blank is absent.
+        :type legend_label: str
+        :param color: Optional series color.
+        :type color: str
+        :param linestyle: Optional line style. Line only.
+        :type linestyle: str
+        :param linewidth: Optional line width in points. Line only.
+        :type linewidth: float
+        :param marker: Optional marker token. Line and scatter only.
+        :type marker: str
+        :param markersize: Optional marker size in points.
+        :type markersize: float
+        :param bar_width: Optional bar-width scale. Bar only.
+        :type bar_width: float
         :return: This session, for further chaining.
         :rtype: PlotterSessionContext
         '''
@@ -582,6 +816,13 @@ class PlotterSessionContext(AppSessionContext):
             name=name,
             id=id,
             marks=marks,
+            legend_label=legend_label,
+            color=color,
+            linestyle=linestyle,
+            linewidth=linewidth,
+            marker=marker,
+            markersize=markersize,
+            bar_width=bar_width,
         )
 
         # Declare again with the settled plot id and the existing series ids.
@@ -596,6 +837,7 @@ class PlotterSessionContext(AppSessionContext):
             self._open['kind'],
             self._open['description'],
             series,
+            self._open['appearance'],
             title=self._open['title'],
             x_title=self._open['x_title'],
             x_unit=self._open['x_unit'],
@@ -653,6 +895,7 @@ class PlotterSessionContext(AppSessionContext):
             [
                 addition,
             ],
+            self._open['appearance'],
             title=self._open['title'],
             x_title=self._open['x_title'],
             x_unit=self._open['x_unit'],
@@ -679,6 +922,7 @@ class PlotterSessionContext(AppSessionContext):
             self._open['kind'],
             self._open['description'],
             rebuilt,
+            self._open['appearance'],
             title=self._open['title'],
             x_title=self._open['x_title'],
             x_unit=self._open['x_unit'],
@@ -783,6 +1027,19 @@ class PlotterSessionContext(AppSessionContext):
             x_unit=plot.x_unit,
             y_title=plot.y_title,
             y_unit=plot.y_unit,
+            show_legend=plot.show_legend,
+            legend_location=plot.legend_location,
+            legend_title=plot.legend_title,
+            title_size=plot.title_size,
+            subtitle_size=plot.subtitle_size,
+            axis_label_size=plot.axis_label_size,
+            tick_label_size=plot.tick_label_size,
+            legend_size=plot.legend_size,
+            x_tick_rotation=plot.x_tick_rotation,
+            y_tick_rotation=plot.y_tick_rotation,
+            x_tick_decimals=plot.x_tick_decimals,
+            y_tick_decimals=plot.y_tick_decimals,
+            font_family=plot.font_family,
         )
 
         # Success drops the in-memory plot. A failure does not reach here.
