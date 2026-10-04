@@ -12,6 +12,7 @@ import pytest
 
 # ** app
 import tiferet_plot
+from tiferet.domain import ModelError
 from tiferet_plot.domain.plot import (
     Mark,
     MatrixCell,
@@ -467,7 +468,7 @@ def test_illegal_kind_fails_and_returns_no_picture(kind, monkeypatch, tmp_path):
     record = illegal_record(kind, line_marks())
 
     # The failure is the picture not being returned.
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render(record, 8, 4)
     assert list(tmp_path.iterdir()) == []
 
@@ -498,7 +499,7 @@ def test_illegal_marks_fail_and_return_no_picture(
     )
 
     # No picture, and no publication file.
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render(illegal_record(kind, marks), 8, 4)
     assert list(tmp_path.iterdir()) == []
 
@@ -513,9 +514,14 @@ def test_renderer_does_not_keep_or_import_a_store():
     source = Path(renderer_module.__file__).read_text()
     assert 'PlotService' not in source
     assert 'open(' not in source
-    imported = ' '.join(imported_modules(Path(renderer_module.__file__)))
-    assert 'repos' not in imported
-    assert 'domain' not in imported
+    imported = imported_modules(Path(renderer_module.__file__))
+    assert 'repos' not in ' '.join(imported)
+    assert not any(
+        name == 'domain'
+        or name.startswith('domain.')
+        or 'tiferet_plot.domain' in name
+        for name in imported
+    )
 
 # ** test: matplotlib_renderer_implements_the_service
 def test_matplotlib_renderer_implements_the_service():
@@ -685,7 +691,7 @@ def test_render_matrix_fails_when_a_cell_fails(tmp_path, monkeypatch):
     )
 
     # The failure is the picture not being returned. No file is written.
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render_matrix(matrix, 8, 6)
     assert list(tmp_path.iterdir()) == []
 
@@ -807,9 +813,9 @@ def test_omitted_or_illegal_size_returns_no_picture(
     matrix = occupied_matrix([plot])
 
     # The same failures apply to one plot and to the grid.
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render(plot, width, height)
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render_matrix(matrix, width, height)
     assert list(tmp_path.iterdir()) == []
 
@@ -1349,7 +1355,7 @@ def test_line_and_scatter_style_defaults_are_not_written_back(
             ),
         ],
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render(illegal, 8, 4)
     assert list(tmp_path.iterdir()) == []
 
@@ -1553,9 +1559,9 @@ def test_text_on_both_axes_or_a_bar_label_returns_no_picture(
         'bar',
         bar_marks() + [Mark(role='label', values=('North', 'South'))],
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render(both, 8, 4)
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         MatplotlibRenderer().render(labeled, 8, 4)
     assert both.id == 'sales_by_region'
     assert [mark.role for mark in labeled.series[0].marks] == [

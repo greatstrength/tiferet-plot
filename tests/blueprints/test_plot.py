@@ -11,6 +11,7 @@ import pytest
 
 # ** app
 from tiferet import TiferetError
+from tiferet.domain import ModelError
 from tiferet.di import DIAppServiceContainer, DIDynamicServiceContainer
 from tiferet.interfaces import ServiceError
 from tiferet_plot.blueprints.plot import create_plotter_session, show_handler
@@ -409,7 +410,7 @@ def test_show_returns_png_bytes_and_does_not_write_a_file(tmp_path):
     # Show does not invent a size. A missing or illegal pair returns no picture.
     with pytest.raises(TypeError):
         session.show(created)
-    with pytest.raises(ValueError):
+    with pytest.raises(ModelError):
         session.show(created, 0, 4)
     assert path.read_bytes() == before
 

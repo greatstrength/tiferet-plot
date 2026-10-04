@@ -880,9 +880,10 @@ class Series(DomainObject):
         :rtype: str
         '''
 
-        # A present label is the text. An absent label falls back, unread back.
-        if self.legend_label:
-            return self.legend_label
+        # A blank label is absent. Do not write the name onto the label.
+        label = self.legend_label
+        if isinstance(label, str) and label.strip():
+            return label
 
         # The series name is the reading. It is not stored as the label.
         return self.name

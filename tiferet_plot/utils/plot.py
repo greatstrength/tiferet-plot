@@ -19,6 +19,7 @@ from matplotlib.ticker import FixedLocator, FormatStrFormatter
 from matplotlib.transforms import ScaledTranslation
 
 # ** app
+from tiferet.domain import ModelError
 from ..interfaces.plot import RendererService
 from ..mappers.plot import PlotAggregate, PlotMatrixAggregate
 
@@ -176,10 +177,156 @@ OUTSIDE_LEGEND_GAP = 4
 # ** constant: text_tick_rotation
 TEXT_TICK_ROTATION = 45
 
+# *** constants (error)
+
+# ** constant: picture_size_illegal_id
+PICTURE_SIZE_ILLEGAL_ID = 'PICTURE_SIZE_ILLEGAL'
+
+# ** constant: picture_size_illegal_message
+PICTURE_SIZE_ILLEGAL_MESSAGE = (
+    '{name} must be a positive number of inches.'
+)
+
+# ** constant: kind_not_declared_id
+KIND_NOT_DECLARED_ID = 'KIND_NOT_DECLARED'
+
+# ** constant: kind_not_declared_message
+KIND_NOT_DECLARED_MESSAGE = (
+    'Kind {kind} is not one of {allowed}.'
+)
+
+# ** constant: plot_requires_series_id
+PLOT_REQUIRES_SERIES_ID = 'PLOT_REQUIRES_SERIES'
+
+# ** constant: plot_requires_series_message
+PLOT_REQUIRES_SERIES_MESSAGE = (
+    'A plot requires at least one series.'
+)
+
+# ** constant: legend_location_not_declared_id
+LEGEND_LOCATION_NOT_DECLARED_ID = 'LEGEND_LOCATION_NOT_DECLARED'
+
+# ** constant: legend_location_not_declared_message
+LEGEND_LOCATION_NOT_DECLARED_MESSAGE = (
+    'Legend location {location} is not a declared place.'
+)
+
+# ** constant: duplicate_mark_role_id
+DUPLICATE_MARK_ROLE_ID = 'DUPLICATE_MARK_ROLE'
+
+# ** constant: duplicate_mark_role_message
+DUPLICATE_MARK_ROLE_MESSAGE = (
+    'Duplicate mark role {role}.'
+)
+
+# ** constant: mark_role_not_allowed_id
+MARK_ROLE_NOT_ALLOWED_ID = 'MARK_ROLE_NOT_ALLOWED'
+
+# ** constant: mark_role_not_allowed_message
+MARK_ROLE_NOT_ALLOWED_MESSAGE = (
+    'Kind {kind} does not allow mark role {role}.'
+)
+
+# ** constant: mark_role_required_id
+MARK_ROLE_REQUIRED_ID = 'MARK_ROLE_REQUIRED'
+
+# ** constant: mark_role_required_message
+MARK_ROLE_REQUIRED_MESSAGE = (
+    'Kind {kind} requires mark role {role}.'
+)
+
+# ** constant: mark_role_empty_id
+MARK_ROLE_EMPTY_ID = 'MARK_ROLE_EMPTY'
+
+# ** constant: mark_role_empty_message
+MARK_ROLE_EMPTY_MESSAGE = (
+    'Mark role {role} requires at least one value.'
+)
+
+# ** constant: mark_length_mismatch_id
+MARK_LENGTH_MISMATCH_ID = 'MARK_LENGTH_MISMATCH'
+
+# ** constant: mark_length_mismatch_message
+MARK_LENGTH_MISMATCH_MESSAGE = (
+    'Mark value sequences must have equal length.'
+)
+
+# ** constant: axis_not_numeric_id
+AXIS_NOT_NUMERIC_ID = 'AXIS_NOT_NUMERIC'
+
+# ** constant: axis_not_numeric_message
+AXIS_NOT_NUMERIC_MESSAGE = (
+    'Kind {kind} requires at least one of x and y to be numeric.'
+)
+
+# ** constant: mark_role_not_numeric_id
+MARK_ROLE_NOT_NUMERIC_ID = 'MARK_ROLE_NOT_NUMERIC'
+
+# ** constant: mark_role_not_numeric_message
+MARK_ROLE_NOT_NUMERIC_MESSAGE = (
+    'Mark role {role} requires numeric values.'
+)
+
+# ** constant: mark_role_not_text_id
+MARK_ROLE_NOT_TEXT_ID = 'MARK_ROLE_NOT_TEXT'
+
+# ** constant: mark_role_not_text_message
+MARK_ROLE_NOT_TEXT_MESSAGE = (
+    'Mark role {role} requires text values.'
+)
+
+# ** constant: mark_role_blank_id
+MARK_ROLE_BLANK_ID = 'MARK_ROLE_BLANK'
+
+# ** constant: mark_role_blank_message
+MARK_ROLE_BLANK_MESSAGE = (
+    'Mark role {role} requires a non-blank name when the values are text.'
+)
+
+# ** constant: mark_role_mixed_sort_id
+MARK_ROLE_MIXED_SORT_ID = 'MARK_ROLE_MIXED_SORT'
+
+# ** constant: mark_role_mixed_sort_message
+MARK_ROLE_MIXED_SORT_MESSAGE = (
+    'Mark role {role} requires values of one sort, numeric or text.'
+)
+
+# ** constant: mark_role_not_declared_id
+MARK_ROLE_NOT_DECLARED_ID = 'MARK_ROLE_NOT_DECLARED'
+
+# ** constant: mark_role_not_declared_message
+MARK_ROLE_NOT_DECLARED_MESSAGE = (
+    'Mark role {role} is not a declared role.'
+)
+
+# ** constant: series_style_not_shown_id
+SERIES_STYLE_NOT_SHOWN_ID = 'SERIES_STYLE_NOT_SHOWN'
+
+# ** constant: series_style_not_shown_message
+SERIES_STYLE_NOT_SHOWN_MESSAGE = (
+    'Kind {kind} does not use {field}.'
+)
+
+# ** constant: marker_not_declared_id
+MARKER_NOT_DECLARED_ID = 'MARKER_NOT_DECLARED'
+
+# ** constant: marker_not_declared_message
+MARKER_NOT_DECLARED_MESSAGE = (
+    'Marker {marker} is not a declared marker.'
+)
+
+# ** constant: color_not_declared_id
+COLOR_NOT_DECLARED_ID = 'COLOR_NOT_DECLARED'
+
+# ** constant: color_not_declared_message
+COLOR_NOT_DECLARED_MESSAGE = (
+    'Color {color} is not a six-digit hex or a CSS Level 1 name.'
+)
+
 # *** functions
 
 # ** function: _require_picture_size
-def _require_picture_size(width, height) -> None:
+def _require_picture_size(width, height, model=None) -> None:
     '''
     Require a positive width and height in inches.
 
@@ -200,8 +347,13 @@ def _require_picture_size(width, height) -> None:
         if (isinstance(value, bool)
                 or not isinstance(value, (int, float))
                 or value <= 0):
-            raise ValueError(
-                f'{name.capitalize()} must be a positive number of inches.'
+            ModelError.raise_error(
+                PICTURE_SIZE_ILLEGAL_ID,
+                message=PICTURE_SIZE_ILLEGAL_MESSAGE.format(
+                    name=name.capitalize(),
+                ),
+                model=model,
+                name=name,
             )
 
 # ** function: _is_numeric
@@ -343,31 +495,8 @@ def _composed_label(title, unit):
     # Neither present. Do not draw an empty label.
     return None
 
-# ** function: _legend_entry
-def _legend_entry(series) -> str:
-    '''
-    Return one series' legend text.
-
-    A present label is that text. An absent or blank label is the series
-    name. The name is not written into the label. A point label is not
-    an entry.
-
-    :param series: The series.
-    :type series: SeriesAggregate
-    :return: The entry text.
-    :rtype: str
-    '''
-
-    # A present label is the entry. The series name is not written back.
-    label = _present(getattr(series, 'legend_label', None))
-    if label is not None:
-        return label
-
-    # The series name is the reading. It is not stored as the label.
-    return series.name
-
 # ** function: _role_sort
-def _role_sort(role: str, values) -> str:
+def _role_sort(role: str, values, model=None) -> str:
     '''
     Return the sort of one role, or refuse the picture.
 
@@ -386,16 +515,22 @@ def _role_sort(role: str, values) -> str:
     # Height stays numeric. Do not accept text that looks like a number.
     if role in NUMERIC_MARK_ROLES:
         if any(not _is_numeric(value) for value in values):
-            raise ValueError(
-                f'Mark role {role!r} requires numeric values.'
+            ModelError.raise_error(
+                MARK_ROLE_NOT_NUMERIC_ID,
+                message=MARK_ROLE_NOT_NUMERIC_MESSAGE.format(role=role),
+                model=model,
+                role=role,
             )
         return 'numeric'
 
     # Category and label are text. A blank label is still text.
     if role in TEXT_MARK_ROLES:
         if any(not isinstance(value, str) for value in values):
-            raise ValueError(
-                f'Mark role {role!r} requires text values.'
+            ModelError.raise_error(
+                MARK_ROLE_NOT_TEXT_ID,
+                message=MARK_ROLE_NOT_TEXT_MESSAGE.format(role=role),
+                model=model,
+                role=role,
             )
         return 'text'
 
@@ -405,20 +540,30 @@ def _role_sort(role: str, values) -> str:
             return 'numeric'
         if all(isinstance(value, str) for value in values):
             if any(not value.strip() for value in values):
-                raise ValueError(
-                    f'Mark role {role!r} requires a non-blank name '
-                    'when the values are text.'
+                ModelError.raise_error(
+                    MARK_ROLE_BLANK_ID,
+                    message=MARK_ROLE_BLANK_MESSAGE.format(role=role),
+                    model=model,
+                    role=role,
                 )
             return 'text'
-        raise ValueError(
-            f'Mark role {role!r} requires values of one sort, numeric or text.'
+        ModelError.raise_error(
+            MARK_ROLE_MIXED_SORT_ID,
+            message=MARK_ROLE_MIXED_SORT_MESSAGE.format(role=role),
+            model=model,
+            role=role,
         )
 
     # A role outside the closed list is not a sort this check names.
-    raise ValueError(f'Mark role {role!r} is not a declared role.')
+    ModelError.raise_error(
+        MARK_ROLE_NOT_DECLARED_ID,
+        message=MARK_ROLE_NOT_DECLARED_MESSAGE.format(role=role),
+        model=model,
+        role=role,
+    )
 
 # ** function: _drawable_marks
-def _drawable_marks(kind: str, marks) -> dict:
+def _drawable_marks(kind: str, marks, model=None) -> dict:
     '''
     Return mark values when they match the kind, else refuse the picture.
 
@@ -439,7 +584,12 @@ def _drawable_marks(kind: str, marks) -> dict:
     by_role = {}
     for mark in marks:
         if mark.role in by_role:
-            raise ValueError(f'Duplicate mark role {mark.role!r}.')
+            ModelError.raise_error(
+                DUPLICATE_MARK_ROLE_ID,
+                message=DUPLICATE_MARK_ROLE_MESSAGE.format(role=mark.role),
+                model=model,
+                role=mark.role,
+            )
         by_role[mark.role] = mark.values
 
     # The kind selects the roles. Label is optional. Any other extra role fails.
@@ -447,15 +597,29 @@ def _drawable_marks(kind: str, marks) -> dict:
     allowed = required + OPTIONAL_MARK_ROLES_BY_KIND[kind]
     extra = [role for role in by_role if role not in allowed]
     if extra:
-        raise ValueError(
-            f'Kind {kind!r} does not allow mark role {extra[0]!r}.'
+        ModelError.raise_error(
+            MARK_ROLE_NOT_ALLOWED_ID,
+            message=MARK_ROLE_NOT_ALLOWED_MESSAGE.format(
+                kind=kind,
+                role=extra[0],
+            ),
+            model=model,
+            kind=kind,
+            role=extra[0],
         )
 
     # Every role the drawing path reads must be present. Label may be absent.
     missing = [role for role in required if role not in by_role]
     if missing:
-        raise ValueError(
-            f'Kind {kind!r} requires mark role {missing[0]!r}.'
+        ModelError.raise_error(
+            MARK_ROLE_REQUIRED_ID,
+            message=MARK_ROLE_REQUIRED_MESSAGE.format(
+                kind=kind,
+                role=missing[0],
+            ),
+            model=model,
+            kind=kind,
+            role=missing[0],
         )
 
     # Present values must be one sort, non-empty, and the same length.
@@ -466,15 +630,22 @@ def _drawable_marks(kind: str, marks) -> dict:
             continue
         values = by_role[role]
         if len(values) < 1:
-            raise ValueError(
-                f'Mark role {role!r} requires at least one value.'
+            ModelError.raise_error(
+                MARK_ROLE_EMPTY_ID,
+                message=MARK_ROLE_EMPTY_MESSAGE.format(role=role),
+                model=model,
+                role=role,
             )
-        sorts[role] = _role_sort(role, values)
+        sorts[role] = _role_sort(role, values, model=model)
         lengths.append(len(values))
 
     # Equal length is part of being drawable for the kind.
     if len(set(lengths)) != 1:
-        raise ValueError('Mark value sequences must have equal length.')
+        ModelError.raise_error(
+            MARK_LENGTH_MISMATCH_ID,
+            message=MARK_LENGTH_MISMATCH_MESSAGE,
+            model=model,
+        )
 
     # A line or a scatter still marks a quantity. Two text axes do not.
     both_text = (
@@ -483,8 +654,11 @@ def _drawable_marks(kind: str, marks) -> dict:
         and sorts.get('y') == 'text'
     )
     if both_text:
-        raise ValueError(
-            f'Kind {kind!r} requires at least one of x and y to be numeric.'
+        ModelError.raise_error(
+            AXIS_NOT_NUMERIC_ID,
+            message=AXIS_NOT_NUMERIC_MESSAGE.format(kind=kind),
+            model=model,
+            kind=kind,
         )
 
     # Return the values. Roles are unchanged.
@@ -522,10 +696,19 @@ def _refuse_inapplicable_style(kind: str, series) -> None:
         return
 
     # The kind is what makes the field illegal. Do not start a picture.
-    raise ValueError(f'Kind {kind!r} does not use {field}.')
+    ModelError.raise_error(
+        SERIES_STYLE_NOT_SHOWN_ID,
+        message=SERIES_STYLE_NOT_SHOWN_MESSAGE.format(
+            kind=kind,
+            field=field,
+        ),
+        model=series,
+        kind=kind,
+        field=field,
+    )
 
 # ** function: _tool_marker
-def _tool_marker(token: str):
+def _tool_marker(token: str, model=None):
     '''
     Map a stored marker token to the drawing tool's code.
 
@@ -544,7 +727,12 @@ def _tool_marker(token: str):
     # The tool spelling is not stored. An unknown token is not a picture.
     code = MARKER_CODES.get(token)
     if code is None:
-        raise ValueError(f'Marker {token!r} is not a declared marker.')
+        ModelError.raise_error(
+            MARKER_NOT_DECLARED_ID,
+            message=MARKER_NOT_DECLARED_MESSAGE.format(marker=token),
+            model=model,
+            marker=token,
+        )
 
     # Return the tool code. Do not write it back.
     return code
@@ -578,8 +766,11 @@ def _drawn_color(series, index: int) -> str:
     # A name is mapped here. The hex is not written back. grey is not a key.
     mapped = CSS_COLOR_HEX.get(color)
     if mapped is None:
-        raise ValueError(
-            f'Color {color!r} is not a six-digit hex or a CSS Level 1 name.'
+        ModelError.raise_error(
+            COLOR_NOT_DECLARED_ID,
+            message=COLOR_NOT_DECLARED_MESSAGE.format(color=color),
+            model=series,
+            color=color,
         )
 
     # Return the mapped hex. The record keeps the name.
@@ -628,14 +819,14 @@ def _series_style(kind: str, series, index: int) -> dict:
         )
         marker = getattr(series, 'marker', None)
         if marker is not None:
-            style['marker'] = _tool_marker(marker)
+            style['marker'] = _tool_marker(marker, model=series)
 
     # A scatter's absent marker is circle. no_marker draws nothing.
     if kind == 'scatter':
         marker = getattr(series, 'marker', None)
         if marker is None:
             marker = DEFAULT_SCATTER_MARKER
-        style['marker'] = _tool_marker(marker)
+        style['marker'] = _tool_marker(marker, model=series)
 
     # A size does not invent a marker. It applies only when one is drawn.
     if style['marker'] is not None:
@@ -666,26 +857,47 @@ def _prepare(plot: PlotAggregate) -> tuple:
     kind = plot.kind
     if kind not in RENDER_KINDS:
         allowed = ', '.join(RENDER_KINDS)
-        raise ValueError(f'Kind {kind!r} is not one of {allowed}.')
+        ModelError.raise_error(
+            KIND_NOT_DECLARED_ID,
+            message=KIND_NOT_DECLARED_MESSAGE.format(
+                kind=kind,
+                allowed=allowed,
+            ),
+            model=plot,
+            kind=kind,
+        )
 
     # Nothing to draw is not an empty picture.
     if not plot.series:
-        raise ValueError('A plot requires at least one series.')
+        ModelError.raise_error(
+            PLOT_REQUIRES_SERIES_ID,
+            message=PLOT_REQUIRES_SERIES_MESSAGE,
+            model=plot,
+        )
 
     # An unknown legend place is not a picture. best is not a fallback.
     location = getattr(plot, 'legend_location', None)
     if (location is not None
             and location != 'outside_right'
             and location not in LEGEND_TOOL_LOC):
-        raise ValueError(
-            f'Legend location {location!r} is not a declared place.'
+        ModelError.raise_error(
+            LEGEND_LOCATION_NOT_DECLARED_ID,
+            message=LEGEND_LOCATION_NOT_DECLARED_MESSAGE.format(
+                location=location,
+            ),
+            model=plot,
+            location=location,
         )
 
     # Check marks and style before a figure exists. Do not rename a role.
     series_values = []
     styles = []
     for index, series in enumerate(plot.series):
-        series_values.append(_drawable_marks(kind, series.marks))
+        series_values.append(_drawable_marks(
+            kind,
+            series.marks,
+            model=series,
+        ))
         styles.append(_series_style(kind, series, index))
 
     # Return the readings. Nothing has been written back.
@@ -1509,7 +1721,7 @@ def _draw_legend(figure,
 
     # One entry per series. The same text is still two entries. Not a union.
     handles = [_legend_handle(kind, style) for style in styles]
-    labels = [_legend_entry(series) for series in plot.series]
+    labels = [series.legend_text for series in plot.series]
     size = _supplied(getattr(plot, 'legend_size', None), DEFAULT_LEGEND_SIZE)
     family = _font_family(plot)
     title = _present(getattr(plot, 'legend_title', None))
@@ -1701,7 +1913,7 @@ class MatplotlibRenderer(RendererService):
         '''
 
         # Refuse a size that is not a picture. Do not start a figure.
-        _require_picture_size(width, height)
+        _require_picture_size(width, height, model=plot)
 
         # Refuse a record this renderer cannot draw. Do not start a picture.
         series_values, styles = _prepare(plot)
@@ -1742,7 +1954,7 @@ class MatplotlibRenderer(RendererService):
         '''
 
         # Refuse a size that is not a picture. Do not draw a cell.
-        _require_picture_size(width, height)
+        _require_picture_size(width, height, model=matrix)
 
         # Draw every occupied cell at that same size. A failure returns no grid.
         pictures = []
