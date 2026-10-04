@@ -7,15 +7,77 @@ import inspect
 
 # ** infra
 import pytest
-from pydantic import ValidationError
 
 # ** app
+from tiferet.domain import ModelError
 from tiferet.events import DomainEvent
 from tiferet.interfaces import ServiceError
 from tiferet_plot.domain.plot import Mark, Series
 from tiferet_plot.events.plot import CreateMatrix, CreatePlot, UpdateMatrix, UpdatePlot
 from tiferet_plot.interfaces.plot import MATRIX_NOT_KEPT_ID, PLOT_NOT_KEPT_ID
 from tiferet_plot.mappers.plot import PlotAggregate, PlotMatrixAggregate
+
+# *** functions
+
+# ** function: line_marks
+def line_marks():
+    '''
+    Build numeric x and y marks.
+
+    :return: Marks for a line series.
+    :rtype: list
+    '''
+
+    # Return the two required roles.
+    return [
+        Mark(role='x', values=(1, 2)),
+        Mark(role='y', values=(3, 4)),
+    ]
+
+# ** function: series
+def series(color=None):
+    '''
+    Build one Revenue series.
+
+    :param color: Optional series color.
+    :type color: str
+    :return: The series.
+    :rtype: Series
+    '''
+
+    # Color rides on the series. There is no separate color argument.
+    return Series(name='Revenue', color=color, marks=line_marks())
+
+# ** function: cell
+def cell(plot_id, color):
+    '''
+    Build one occupied cell.
+
+    :param plot_id: The supplied plot id.
+    :type plot_id: str
+    :param color: The series color.
+    :type color: str
+    :return: A cell mapping.
+    :rtype: dict
+    '''
+
+    # The plot id is supplied. The matrix must not derive it.
+    return {
+        'row': 0,
+        'col': 0 if plot_id == 'left' else 1,
+        'plot': {
+            'id': plot_id,
+            'name': 'Revenue',
+            'kind': 'line',
+            'series': [
+                {
+                    'name': 'Revenue',
+                    'color': color,
+                    'marks': line_marks(),
+                },
+            ],
+        },
+    }
 
 # *** classes
 
@@ -169,68 +231,6 @@ class MemoryMatrixService:
             raise ServiceError(MATRIX_NOT_KEPT_ID, message='missing')
         self.records[matrix.id] = matrix
 
-# *** functions
-
-# ** function: line_marks
-def line_marks():
-    '''
-    Build numeric x and y marks.
-
-    :return: Marks for a line series.
-    :rtype: list
-    '''
-
-    # Return the two required roles.
-    return [
-        Mark(role='x', values=(1, 2)),
-        Mark(role='y', values=(3, 4)),
-    ]
-
-# ** function: series
-def series(color=None):
-    '''
-    Build one Revenue series.
-
-    :param color: Optional series color.
-    :type color: str
-    :return: The series.
-    :rtype: Series
-    '''
-
-    # Color rides on the series. There is no separate color argument.
-    return Series(name='Revenue', color=color, marks=line_marks())
-
-# ** function: cell
-def cell(plot_id, color):
-    '''
-    Build one occupied cell.
-
-    :param plot_id: The supplied plot id.
-    :type plot_id: str
-    :param color: The series color.
-    :type color: str
-    :return: A cell mapping.
-    :rtype: dict
-    '''
-
-    # The plot id is supplied. The matrix must not derive it.
-    return {
-        'row': 0,
-        'col': 0 if plot_id == 'left' else 1,
-        'plot': {
-            'id': plot_id,
-            'name': 'Revenue',
-            'kind': 'line',
-            'series': [
-                {
-                    'name': 'Revenue',
-                    'color': color,
-                    'marks': line_marks(),
-                },
-            ],
-        },
-    }
-
 # *** tests
 
 # ** test: create_plot_accepts_appearance_and_has_no_color_parameter
@@ -354,7 +354,7 @@ def test_update_matrix_disagreement_leaves_the_kept_record():
         cells=[cell('left', '#1f77b4'), cell('right', '#ff7f0e')],
     )
     before = service.get('sales_by_region').model_dump()
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         DomainEvent.handle(
             UpdateMatrix,
             dependencies={'matrix_service': service},

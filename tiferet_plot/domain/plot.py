@@ -67,33 +67,6 @@ AXIS_MARK_ROLES = (
     'y',
 )
 
-# *** constants (error)
-
-# ** constant: addition_role_not_in_series_id
-ADDITION_ROLE_NOT_IN_SERIES_ID = 'ADDITION_ROLE_NOT_IN_SERIES'
-
-# ** constant: addition_role_not_in_series_message
-ADDITION_ROLE_NOT_IN_SERIES_MESSAGE = (
-    'The addition carries mark role {role}, which this series does not carry.'
-)
-
-# ** constant: addition_role_missing_id
-ADDITION_ROLE_MISSING_ID = 'ADDITION_ROLE_MISSING'
-
-# ** constant: addition_role_missing_message
-ADDITION_ROLE_MISSING_MESSAGE = (
-    'The addition omits mark role {role}, which this series carries.'
-)
-
-# ** constant: addition_sort_mismatch_id
-ADDITION_SORT_MISMATCH_ID = 'ADDITION_SORT_MISMATCH'
-
-# ** constant: addition_sort_mismatch_message
-ADDITION_SORT_MISMATCH_MESSAGE = (
-    'The addition plays mark role {role} as {addition_sort} values, '
-    'and this series plays it as {series_sort} values.'
-)
-
 # ** constant: css_color_names
 CSS_COLOR_NAMES = (
     'aqua',
@@ -165,6 +138,49 @@ ABSENT_COLOR_CYCLE = (
     '#7f7f7f',
     '#bcbd22',
     '#17becf',
+)
+
+# *** constants (error)
+
+# ** constant: addition_role_not_in_series_id
+ADDITION_ROLE_NOT_IN_SERIES_ID = 'ADDITION_ROLE_NOT_IN_SERIES'
+
+# ** constant: addition_role_not_in_series_message
+ADDITION_ROLE_NOT_IN_SERIES_MESSAGE = (
+    'The addition carries mark role {role}, which this series does not carry.'
+)
+
+# ** constant: addition_role_missing_id
+ADDITION_ROLE_MISSING_ID = 'ADDITION_ROLE_MISSING'
+
+# ** constant: addition_role_missing_message
+ADDITION_ROLE_MISSING_MESSAGE = (
+    'The addition omits mark role {role}, which this series carries.'
+)
+
+# ** constant: addition_sort_mismatch_id
+ADDITION_SORT_MISMATCH_ID = 'ADDITION_SORT_MISMATCH'
+
+# ** constant: addition_sort_mismatch_message
+ADDITION_SORT_MISMATCH_MESSAGE = (
+    'The addition plays mark role {role} as {addition_sort} values, '
+    'and this series plays it as {series_sort} values.'
+)
+
+# ** constant: series_style_not_shown_id
+SERIES_STYLE_NOT_SHOWN_ID = 'SERIES_STYLE_NOT_SHOWN'
+
+# ** constant: series_style_not_shown_message
+SERIES_STYLE_NOT_SHOWN_MESSAGE = (
+    'Kind {kind} does not use {field}.'
+)
+
+# ** constant: grid_legend_swatches_disagree_id
+GRID_LEGEND_SWATCHES_DISAGREE_ID = 'GRID_LEGEND_SWATCHES_DISAGREE'
+
+# ** constant: grid_legend_swatches_disagree_message
+GRID_LEGEND_SWATCHES_DISAGREE_MESSAGE = (
+    'Grid legend text {text} has disagreeing swatches.'
 )
 
 # *** functions
@@ -593,7 +609,7 @@ def _validate_series(kind: str, series: Sequence[Series]) -> None:
                 )
 
         # A present style the kind does not show fails. An absent one does not.
-        _validate_series_style(kind, item)
+        item.check_style(kind)
 
 # ** function: _optional_bool
 def _optional_bool(value: Any) -> Any:
@@ -758,151 +774,6 @@ def _normalize_color(value: Any) -> Any:
     # A name stays a name. It is not replaced by a hex.
     return name
 
-# ** function: _validate_series_style
-def _validate_series_style(kind: str, series: Series) -> None:
-    '''
-    Reject a present style field the kind does not show.
-
-    Kind does not add or remove the field. An absent value is legal
-    on every kind. A stored value the picture does not show is not.
-
-    :param kind: The plot kind.
-    :type kind: str
-    :param series: The series whose style is checked.
-    :type series: Series
-    :return: None
-    :rtype: None
-    '''
-
-    # Line is the only kind that shows a stroke.
-    if kind != 'line':
-        if series.linestyle is not None:
-            raise ValueError(f'Kind {kind!r} does not use linestyle.')
-        if series.linewidth is not None:
-            raise ValueError(f'Kind {kind!r} does not use linewidth.')
-
-    # A bar has no marker. A present marker or size would not be shown.
-    if kind == 'bar':
-        if series.marker is not None:
-            raise ValueError(f'Kind {kind!r} does not use marker.')
-        if series.markersize is not None:
-            raise ValueError(f'Kind {kind!r} does not use markersize.')
-
-    # Bar width is a bar scale. A line or a scatter does not show it.
-    if kind != 'bar' and series.bar_width is not None:
-        raise ValueError(f'Kind {kind!r} does not use bar_width.')
-
-# ** function: _legend_text
-def _legend_text(series: Series) -> str:
-    '''
-    Return the legend text a later drawer reads.
-
-    The text is ``legend_label`` when it is present. Otherwise it is
-    the series name. This does not write the name back onto the label.
-
-    :param series: The series.
-    :type series: Series
-    :return: The legend text.
-    :rtype: str
-    '''
-
-    # A present label is the text. An absent label falls back, unread back.
-    if series.legend_label:
-        return series.legend_label
-    return series.name
-
-# ** function: _effective_color
-def _effective_color(series: Series, index: int) -> str:
-    '''
-    Return the color a grid swatch compares.
-
-    A stored color is used as stored. A name is not rewritten to hex.
-    An absent color is the cycle hex for this series' index in its own
-    cell, and that hex is not written back.
-
-    :param series: The series.
-    :type series: Series
-    :param index: The series index in its own cell, from zero.
-    :type index: int
-    :return: The effective color.
-    :rtype: str
-    '''
-
-    # A present color is not replaced by the cycle, and not rewritten.
-    if series.color is not None:
-        return series.color
-
-    # The cycle is the absent-color rule. It is not a theme field.
-    return ABSENT_COLOR_CYCLE[index % len(ABSENT_COLOR_CYCLE)]
-
-# ** function: _swatch
-def _swatch(kind: str, series: Series, index: int) -> tuple:
-    '''
-    Return the swatch a grid legend compares.
-
-    Linewidth, marker size, and bar width are not part of the swatch.
-    Absent linestyle is solid. Absent line marker is no marker. Absent
-    scatter marker is circle. A bar has no marker shape.
-
-    :param kind: The cell plot kind.
-    :type kind: str
-    :param series: The series.
-    :type series: Series
-    :param index: The series index in its own cell, from zero.
-    :type index: int
-    :return: The swatch.
-    :rtype: tuple
-    '''
-
-    # Color is stored as given, or the cycle hex when absent.
-    color = _effective_color(series, index)
-
-    # A bar swatch is its color. It has no marker shape.
-    if kind == 'bar':
-        return (kind, color)
-
-    # A scatter swatch is the marker. Absent means circle, not stored.
-    if kind == 'scatter':
-        marker = 'circle' if series.marker is None else series.marker
-        return (kind, color, marker)
-
-    # A line swatch is the stroke and the marker. Absences are not stored.
-    linestyle = 'solid' if series.linestyle is None else series.linestyle
-    marker = 'no_marker' if series.marker is None else series.marker
-    return (kind, color, linestyle, marker)
-
-# ** function: _validate_grid_legend
-def _validate_grid_legend(matrix: PlotMatrix) -> None:
-    '''
-    Fail when a requested grid legend cannot agree on a swatch.
-
-    The check runs only when the matrix asks for a legend. The union
-    is not stored. A cell's own legend flag does not filter it.
-
-    :param matrix: The declared matrix.
-    :type matrix: PlotMatrix
-    :return: None
-    :rtype: None
-    '''
-
-    # Absent and false do not ask. The cells stay legal either way.
-    if matrix.show_legend is not True:
-        return
-
-    # Order is row, then column, then series order inside the cell.
-    owned = {}
-    cells = sorted(matrix.cells, key=lambda cell: (cell.row, cell.col))
-    for cell in cells:
-        for index, series in enumerate(cell.plot.series):
-            text = _legend_text(series)
-            swatch = _swatch(cell.plot.kind, series, index)
-            previous = owned.get(text)
-            if previous is not None and previous != swatch:
-                raise ValueError(
-                    f'Grid legend text {text!r} has disagreeing swatches.'
-                )
-            owned.setdefault(text, swatch)
-
 # *** models
 
 # ** model: mark
@@ -996,6 +867,26 @@ class Series(DomainObject):
         description='Optional scale of the grouped-bar slot width. Positive. Bar only.',
     )
 
+    # * method: legend_text (property)
+    @property
+    def legend_text(self) -> str:
+        '''
+        Return the legend text a later drawer reads.
+
+        A present label is that text. An absent label is the series name.
+        The name is not written back onto the label.
+
+        :return: The legend text.
+        :rtype: str
+        '''
+
+        # A present label is the text. An absent label falls back, unread back.
+        if self.legend_label:
+            return self.legend_label
+
+        # The series name is the reading. It is not stored as the label.
+        return self.name
+
     # * method: verify_addition
     def verify_addition(self, addition: Series) -> None:
         '''
@@ -1060,63 +951,106 @@ class Series(DomainObject):
                     role=mark.role,
                 )
 
-    # * method: legend_text (property)
-    legend_label: str | None = Field(
-        default=None,
-        description='Optional legend text. Blank is absent. Not derived from the name.',
-    )
-
-    # * attribute: color
-    color: str | None = Field(
-        default=None,
-        description='Optional series color. Six-digit hex or a CSS Level 1 name.',
-    )
-
-    # * attribute: linestyle
-    linestyle: str | None = Field(
-        default=None,
-        description='Optional line style. One of solid, dashed, dotted, or dashdot.',
-    )
-
-    # * attribute: linewidth
-    linewidth: int | float | None = Field(
-        default=None,
-        description='Optional line width in points. Positive. Line only.',
-    )
-
-    # * attribute: marker
-    marker: str | None = Field(
-        default=None,
-        description='Optional marker token. Line and scatter only. Not a tool code.',
-    )
-
-    # * attribute: markersize
-    markersize: int | float | None = Field(
-        default=None,
-        description='Optional marker size in points. Positive. Line and scatter only.',
-    )
-
-    # * attribute: bar_width
-    bar_width: int | float | None = Field(
-        default=None,
-        description='Optional scale of the grouped-bar slot width. Positive. Bar only.',
-    )
-
-    # * method: legend_text (property)
-    @property
-    def legend_text(self) -> str:
+    # * method: effective_color
+    def effective_color(self, index: int) -> str:
         '''
-        Return the legend text a later drawer reads.
+        Return the color a grid swatch compares.
 
-        A present label is that text. An absent label is the series name.
-        The name is not written back onto the label.
+        A stored color is returned as stored. A name is not rewritten
+        to hex. An absent color is the cycle hex for this series' index
+        in its own cell, and that hex is not written back.
 
-        :return: The legend text.
+        :param index: The series index in its own cell, from zero.
+        :type index: int
+        :return: The effective color.
         :rtype: str
         '''
 
-        # The fallback is a reading. It is not a stored default.
-        return _legend_text(self)
+        # A present color is not replaced by the cycle, and not rewritten.
+        if self.color is not None:
+            return self.color
+
+        # The cycle is the absent-color rule. It is not a theme field.
+        return ABSENT_COLOR_CYCLE[index % len(ABSENT_COLOR_CYCLE)]
+
+    # * method: swatch
+    def swatch(self, kind: str, index: int) -> tuple:
+        '''
+        Return the swatch a grid legend compares.
+
+        Kind is an argument. It is not stored on the series. Linewidth,
+        marker size, and bar width are not part of the swatch. Absent
+        linestyle, line marker, and scatter marker are readings, not
+        stored values.
+
+        :param kind: The cell plot kind.
+        :type kind: str
+        :param index: The series index in its own cell, from zero.
+        :type index: int
+        :return: The swatch.
+        :rtype: tuple
+        '''
+
+        # Color is stored as given, or the cycle hex when absent.
+        color = self.effective_color(index)
+
+        # A bar swatch is its color. It has no marker shape.
+        if kind == 'bar':
+            return (kind, color)
+
+        # A scatter swatch is the marker. Absent means circle, not stored.
+        if kind == 'scatter':
+            marker = 'circle' if self.marker is None else self.marker
+            return (kind, color, marker)
+
+        # A line swatch is the stroke and the marker. Absences are not stored.
+        linestyle = 'solid' if self.linestyle is None else self.linestyle
+        marker = 'no_marker' if self.marker is None else self.marker
+        return (kind, color, linestyle, marker)
+
+    # * method: check_style
+    def check_style(self, kind: str) -> None:
+        '''
+        Reject a present style field the kind does not show.
+
+        Kind is an argument. It is not stored on the series. An absent
+        value is legal on every kind. A stored value the picture does
+        not show is not.
+
+        :param kind: The plot kind.
+        :type kind: str
+        :return: None
+        :rtype: None
+        :raises ModelError: ``SERIES_STYLE_NOT_SHOWN`` when a present
+            style field does not apply to the kind.
+        '''
+
+        # The first inapplicable field fails. The value is not cleared.
+        field = None
+        if kind != 'line' and self.linestyle is not None:
+            field = 'linestyle'
+        elif kind != 'line' and self.linewidth is not None:
+            field = 'linewidth'
+        elif kind == 'bar' and self.marker is not None:
+            field = 'marker'
+        elif kind == 'bar' and self.markersize is not None:
+            field = 'markersize'
+        elif kind != 'bar' and self.bar_width is not None:
+            field = 'bar_width'
+        if field is None:
+            return
+
+        # The field stays on the series. The kind is what makes it illegal.
+        ModelError.raise_error(
+            SERIES_STYLE_NOT_SHOWN_ID,
+            message=SERIES_STYLE_NOT_SHOWN_MESSAGE.format(
+                kind=kind,
+                field=field,
+            ),
+            model=self,
+            kind=kind,
+            field=field,
+        )
 
     # * method: _normalize_legend_label (field validator)
     @field_validator('legend_label', mode='before')
@@ -1468,59 +1402,6 @@ class Plot(DomainObject):
         # Return the supplied kind.
         return kind
 
-    # * method: _derive_id (model validator)
-    @model_validator(mode='before')
-    @classmethod
-    def _derive_id(cls, data: Any) -> Any:
-        '''
-        Derive a missing plot id from its name.
-
-        Description is not identity. Kind is not inferred from the values.
-
-        :param data: The raw plot input.
-        :type data: Any
-        :return: The plot input, with id filled when it was omitted.
-        :rtype: Any
-        '''
-
-        # Fill a missing id once. A supplied id is kept as given.
-        return _fill_id(data)
-
-    # * method: _validate_kind (field validator)
-    @field_validator('kind')
-    @classmethod
-    def _validate_kind(cls, value: str) -> str:
-        '''
-        Reject a kind that is not one of the declared kinds.
-
-        :param value: The supplied kind.
-        :type value: str
-        :return: The kind, unchanged.
-        :rtype: str
-        '''
-
-        # The plot describes a legal kind. Do not restate that rule here.
-        return cls.require_kind(value)
-
-    # * method: _normalize_figure_text (field validator)
-    @field_validator('title', 'x_title', 'x_unit', 'y_title', 'y_unit')
-    @classmethod
-    def _normalize_figure_text(cls, value: str | None) -> str | None:
-        '''
-        Store omitted and blank figure text as absent.
-
-        Declaration does not fill ``title`` from the name, and it does
-        not write a unit into a title.
-
-        :param value: The supplied text.
-        :type value: str | None
-        :return: None when the text was omitted or blank, otherwise the string.
-        :rtype: str | None
-        '''
-
-        # Blank and omitted are the same case. Do not store an empty string.
-        return _absent_text(value)
-
     # * method: _validate_show_legend (field validator)
     @field_validator('show_legend', mode='before')
     @classmethod
@@ -1639,6 +1520,59 @@ class Plot(DomainObject):
 
         # A raw family name is not this token.
         return _optional_token(value, FONT_FAMILIES)
+
+    # * method: _derive_id (model validator)
+    @model_validator(mode='before')
+    @classmethod
+    def _derive_id(cls, data: Any) -> Any:
+        '''
+        Derive a missing plot id from its name.
+
+        Description is not identity. Kind is not inferred from the values.
+
+        :param data: The raw plot input.
+        :type data: Any
+        :return: The plot input, with id filled when it was omitted.
+        :rtype: Any
+        '''
+
+        # Fill a missing id once. A supplied id is kept as given.
+        return _fill_id(data)
+
+    # * method: _validate_kind (field validator)
+    @field_validator('kind')
+    @classmethod
+    def _validate_kind(cls, value: str) -> str:
+        '''
+        Reject a kind that is not one of the declared kinds.
+
+        :param value: The supplied kind.
+        :type value: str
+        :return: The kind, unchanged.
+        :rtype: str
+        '''
+
+        # The plot describes a legal kind. Do not restate that rule here.
+        return cls.require_kind(value)
+
+    # * method: _normalize_figure_text (field validator)
+    @field_validator('title', 'x_title', 'x_unit', 'y_title', 'y_unit')
+    @classmethod
+    def _normalize_figure_text(cls, value: str | None) -> str | None:
+        '''
+        Store omitted and blank figure text as absent.
+
+        Declaration does not fill ``title`` from the name, and it does
+        not write a unit into a title.
+
+        :param value: The supplied text.
+        :type value: str | None
+        :return: None when the text was omitted or blank, otherwise the string.
+        :rtype: str | None
+        '''
+
+        # Blank and omitted are the same case. Do not store an empty string.
+        return _absent_text(value)
 
     # * method: _validate_declaration (model validator)
     @model_validator(mode='after')
@@ -1869,6 +1803,44 @@ class PlotMatrix(DomainObject):
         # Description stays as stored. Blank text is not a subtitle.
         return _subtitle_text(self.description)
 
+    # * method: validate
+    def validate(self) -> None:
+        '''
+        Fail when a requested grid legend cannot agree on a swatch.
+
+        The check runs only when the matrix asks for a legend. The union
+        is not stored. A cell's own legend flag does not filter it, and
+        field validation is not run again. Nothing is drawn.
+
+        :return: None
+        :rtype: None
+        :raises ModelError: ``GRID_LEGEND_SWATCHES_DISAGREE`` when two
+            series share legend text and disagree on the swatch.
+        '''
+
+        # Absent and false do not ask. The cells stay legal either way.
+        if self.show_legend is not True:
+            return
+
+        # Order is row, then column, then series order inside the cell.
+        owned = {}
+        cells = sorted(self.cells, key=lambda cell: (cell.row, cell.col))
+        for cell in cells:
+            for index, series in enumerate(cell.plot.series):
+                text = series.legend_text
+                swatch = series.swatch(cell.plot.kind, index)
+                previous = owned.get(text)
+                if previous is not None and previous != swatch:
+                    ModelError.raise_error(
+                        GRID_LEGEND_SWATCHES_DISAGREE_ID,
+                        message=GRID_LEGEND_SWATCHES_DISAGREE_MESSAGE.format(
+                            text=text,
+                        ),
+                        model=self,
+                        text=text,
+                    )
+                owned.setdefault(text, swatch)
+
     # * method: _normalize_title (field validator)
     @field_validator('title')
     @classmethod
@@ -1886,25 +1858,6 @@ class PlotMatrix(DomainObject):
 
         # Blank and omitted are the same case. Do not store an empty string.
         return _absent_text(value)
-
-    # * method: _derive_id (model validator)
-    @model_validator(mode='before')
-    @classmethod
-    def _derive_id(cls, data: Any) -> Any:
-        '''
-        Derive a missing matrix id from its name.
-
-        The rule is the plot id rule. A supplied id is kept. A cell plot
-        id is not derived here.
-
-        :param data: The raw matrix input.
-        :type data: Any
-        :return: The matrix input, with id filled when it was omitted.
-        :rtype: Any
-        '''
-
-        # Fill a missing id once. A supplied id is kept as given.
-        return _fill_id(data)
 
     # * method: _validate_show_legend (field validator)
     @field_validator('show_legend', mode='before')
@@ -2007,6 +1960,25 @@ class PlotMatrix(DomainObject):
         # Zero is a supplied gap. A bool is not a gap of 1.
         return _optional_number(value, nonnegative=True)
 
+    # * method: _derive_id (model validator)
+    @model_validator(mode='before')
+    @classmethod
+    def _derive_id(cls, data: Any) -> Any:
+        '''
+        Derive a missing matrix id from its name.
+
+        The rule is the plot id rule. A supplied id is kept. A cell plot
+        id is not derived here.
+
+        :param data: The raw matrix input.
+        :type data: Any
+        :return: The matrix input, with id filled when it was omitted.
+        :rtype: Any
+        '''
+
+        # Fill a missing id once. A supplied id is kept as given.
+        return _fill_id(data)
+
     # * method: _validate_grid (model validator)
     @model_validator(mode='after')
     def _validate_grid(self) -> PlotMatrix:
@@ -2024,7 +1996,7 @@ class PlotMatrix(DomainObject):
         _validate_cell_positions(self.rows, self.cols, self.cells)
 
         # Ask only when the matrix asks. A cell flag does not filter the union.
-        _validate_grid_legend(self)
+        self.validate()
 
         # Return the declared record. Nothing has been drawn or saved.
         return self

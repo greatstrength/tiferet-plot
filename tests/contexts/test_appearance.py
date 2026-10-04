@@ -15,51 +15,6 @@ from tiferet_plot.contexts.plot import (
 from tiferet_plot.domain.plot import Mark, MatrixCell, Plot, PlotMatrix, Series
 from tiferet_plot.events.plot import CreateMatrix, CreatePlot
 
-# *** classes
-
-# ** class: memory_service
-class MemoryService:
-    '''
-    An in-memory service that inserts whatever the event declares.
-    '''
-
-    # * init
-    def __init__(self) -> None:
-        '''
-        Start with no kept records.
-        '''
-
-        # The id is the key. The value is the record.
-        self.records = {}
-
-    # * method: exists
-    def exists(self, id: str) -> bool:
-        '''
-        Check whether the id is kept.
-
-        :param id: The record id.
-        :type id: str
-        :return: True when the id is kept.
-        :rtype: bool
-        '''
-
-        # Exists follows the mapping.
-        return id in self.records
-
-    # * method: save
-    def save(self, record) -> None:
-        '''
-        Insert the record.
-
-        :param record: The declared record.
-        :type record: Any
-        :return: None
-        :rtype: None
-        '''
-
-        # Insert. These tests do not save twice.
-        self.records[record.id] = record
-
 # *** functions
 
 # ** function: line_marks
@@ -111,6 +66,51 @@ def bound(mapping):
         get_dependency=get_dependency,
         create_handler=create_handler(get_dependency),
     )
+
+# *** classes
+
+# ** class: memory_service
+class MemoryService:
+    '''
+    An in-memory service that inserts whatever the event declares.
+    '''
+
+    # * init
+    def __init__(self) -> None:
+        '''
+        Start with no kept records.
+        '''
+
+        # The id is the key. The value is the record.
+        self.records = {}
+
+    # * method: exists
+    def exists(self, id: str) -> bool:
+        '''
+        Check whether the id is kept.
+
+        :param id: The record id.
+        :type id: str
+        :return: True when the id is kept.
+        :rtype: bool
+        '''
+
+        # Exists follows the mapping.
+        return id in self.records
+
+    # * method: save
+    def save(self, record) -> None:
+        '''
+        Insert the record.
+
+        :param record: The declared record.
+        :type record: Any
+        :return: None
+        :rtype: None
+        '''
+
+        # Insert. These tests do not save twice.
+        self.records[record.id] = record
 
 # *** tests
 

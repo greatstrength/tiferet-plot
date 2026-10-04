@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 # ** app
+from tiferet.domain import ModelError
 from tiferet_plot.domain.plot import (
     ABSENT_COLOR_CYCLE,
     CSS_COLOR_NAMES,
@@ -230,7 +231,7 @@ def test_line_style_is_stored_and_inapplicable_style_fails():
     # A tool spelling and a bar width do not belong on a line.
     with pytest.raises(ValidationError):
         declared_plot(series=[line_series(linestyle='--')])
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         declared_plot(series=[line_series(bar_width=1)])
 
 # ** test: scatter_and_bar_reject_style_they_do_not_show
@@ -249,19 +250,19 @@ def test_scatter_and_bar_reject_style_they_do_not_show():
     assert stored.series[0].marker == 'no_marker'
 
     # Stroke fields do not belong on a scatter.
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         declared_plot(kind='scatter', series=[line_series(linestyle='solid')])
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         declared_plot(kind='scatter', series=[line_series(linewidth=1.5)])
 
     # A marker does not belong on a bar. A scale is stored as supplied.
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         Plot(
             name='Sales by Region',
             kind='bar',
             series=[Series(name='Revenue', marker='circle', marks=bar_marks())],
         )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         Plot(
             name='Sales by Region',
             kind='bar',
@@ -478,7 +479,7 @@ def test_a_requested_grid_legend_fails_when_swatches_disagree():
         MatrixCell(row=0, col=0, plot=cell_plot('left', color='#1f77b4')),
         MatrixCell(row=0, col=1, plot=cell_plot('right', color='#ff7f0e')),
     ]
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         PlotMatrix(
             name='Sales by Region',
             rows=1,
@@ -513,7 +514,7 @@ def test_a_cell_legend_flag_does_not_filter_the_union():
         ),
         MatrixCell(row=0, col=1, plot=cell_plot('right', color='#ff7f0e')),
     ]
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         PlotMatrix(
             name='Sales by Region',
             rows=1,
@@ -564,7 +565,7 @@ def test_absent_colors_use_the_cell_index_and_are_not_written_back():
     assert plot.series[0].color is None
     assert plot.series[1].color is None
     assert ABSENT_COLOR_CYCLE[0] != ABSENT_COLOR_CYCLE[1]
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelError):
         PlotMatrix(
             name='Sales by Region',
             rows=1,
