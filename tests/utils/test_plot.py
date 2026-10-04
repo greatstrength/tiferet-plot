@@ -236,6 +236,79 @@ def occupied_matrix(plots):
         cells=cells,
     )
 
+# ** function: draw
+def draw(plot, monkeypatch, width=8, height=4):
+    '''
+    Render one plot and return the picture, the figure, and the axes.
+
+    :param plot: The declared plot.
+    :type plot: Plot
+    :param monkeypatch: The pytest monkeypatch fixture.
+    :type monkeypatch: Any
+    :param width: The picture width, in inches.
+    :type width: float
+    :param height: The picture height, in inches.
+    :type height: float
+    :return: The PNG bytes, the figure, and the axes.
+    :rtype: tuple
+    '''
+
+    # Keep the figure the renderer built. Do not import the drawing tool here.
+    figures = []
+    real = renderer_module.Figure
+
+    def spy(*args, **kwargs):
+        '''
+        Record the figure and delegate.
+
+        :param args: Figure arguments.
+        :type args: tuple
+        :param kwargs: Figure keyword arguments.
+        :type kwargs: dict
+        :return: The figure.
+        :rtype: Any
+        '''
+
+        # One plot is one figure. The size is the caller's pair.
+        figure = real(*args, **kwargs)
+        figures.append((figure, kwargs.get('figsize')))
+        return figure
+
+    monkeypatch.setattr(renderer_module, 'Figure', spy)
+    png = MatplotlibRenderer().render(plot, width, height)
+
+    # Return the picture and the artists that drew it.
+    figure, figsize = figures[0]
+    return png, figure, figure.axes[0], figsize
+
+# ** function: point_labels
+def point_labels(axes) -> list:
+    '''
+    Return point-label artists. A subtitle is not one of them.
+
+    :param axes: The drawn axes.
+    :type axes: Any
+    :return: Annotation artists.
+    :rtype: list
+    '''
+
+    # A point label carries an offset. Figure text does not.
+    return [text for text in axes.texts if hasattr(text, 'xyann')]
+
+# ** function: subtitles
+def subtitles(axes) -> list:
+    '''
+    Return subtitle artists.
+
+    :param axes: The drawn axes.
+    :type axes: Any
+    :return: Text artists that are not point labels.
+    :rtype: list
+    '''
+
+    # The subtitle is text on the axes. It is not an annotation.
+    return [text for text in axes.texts if not hasattr(text, 'xyann')]
+
 # ** function: render_parameters
 def render_parameters() -> list:
     '''
@@ -406,6 +479,7 @@ def test_illegal_kind_fails_and_returns_no_picture(kind, monkeypatch, tmp_path):
     ('bar', bar_marks() + [Mark(role='y', values=(1, 2))]),
     ('line', [Mark(role='y', values=(3, 4))]),
     ('bar', [Mark(role='height', values=(10, 12))]),
+    ('bar', bar_marks() + [Mark(role='label', values=('North', 'South'))]),
 ])
 def test_illegal_marks_fail_and_return_no_picture(
         kind, marks, monkeypatch, tmp_path):
@@ -648,48 +722,24 @@ def test_no_event_imports_the_utility_or_returns_png():
         assert 'MatplotlibRenderer' not in source
         assert 'png' not in source.lower()
 
-# ** test: render_does_not_read_figure_text
-def test_render_does_not_read_figure_text():
+# ** test: render_matrix_does_not_draw_the_grid_title
+def test_render_matrix_does_not_draw_the_grid_title():
     '''
-    render and render_matrix do not read name, title, description, or axis text.
+    A matrix title does not change the pasted cell picture.
     '''
 
-    # Size is an argument. The methods still do not name the figure-text fields.
-    render_source = inspect.getsource(MatplotlibRenderer.render)
+    # This RFP does not draw a grid title, a grid legend, or grid spacing.
     matrix_source = inspect.getsource(MatplotlibRenderer.render_matrix)
-    for source in (render_source, matrix_source):
-        for name in (
-            'title',
-            'description',
-            'x_title',
-            'x_unit',
-            'y_title',
-            'y_unit',
-            '.name',
-        ):
-            assert name not in source
+    for name in (
+        'row_spacing',
+        'col_spacing',
+        'show_legend',
+        '.name',
+    ):
+        assert name not in matrix_source
 
-    # Two records that differ only in that text draw the same marks.
+    # The cells are the same record. The grid title is not drawn on the paste.
     plain = line_plot()
-    titled = Plot(
-        name='Other Name',
-        title='Quarterly sales, 2024',
-        description='A subtitle.',
-        x_title='Year',
-        x_unit='yr',
-        y_title='Revenue',
-        y_unit='USD',
-        kind='line',
-        series=[
-            Series(name='Revenue', marks=line_marks()),
-        ],
-    )
-    renderer = MatplotlibRenderer()
-    assert image_data(renderer.render(plain, 8, 4)) == image_data(
-        renderer.render(titled, 8, 4),
-    )
-
-    # A matrix title does not change the pasted cell picture.
     matrix = occupied_matrix([plain])
     titled_grid = PlotMatrix(
         name='Other Name',
@@ -699,6 +749,7 @@ def test_render_does_not_read_figure_text():
         cols=2,
         cells=matrix.cells,
     )
+    renderer = MatplotlibRenderer()
     assert image_data(renderer.render_matrix(matrix, 8, 6)) == image_data(
         renderer.render_matrix(titled_grid, 8, 6),
     )
@@ -837,3 +888,679 @@ def test_matrix_picture_is_one_requested_size(monkeypatch):
     source = Path(renderer_module.__file__).read_text()
     assert '4 * cols' not in source
     assert '3 * rows' not in source
+
+# ** test: render_does_not_fill_omitted_appearance
+def test_render_does_not_fill_omitted_appearance(tmp_path, monkeypatch):
+    '''
+    A valid picture is the requested size. Omitted appearance stays omitted.
+    '''
+
+    # An unsaved record has no size and no appearance fields filled in.
+    monkeypatch.chdir(tmp_path)
+    plot = line_plot()
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+
+    # The bytes are a PNG of that size. No file, no dpi argument, no tight crop.
+    assert image_data(png)
+    assert figsize == (8, 4)
+    assert tuple(figure.get_size_inches()) == (8, 4)
+    assert png_size(png) == (
+        round(8 * figure.dpi),
+        round(4 * figure.dpi),
+    )
+    assert plot.model_dump() == before
+    assert 'width' not in plot.model_dump()
+    assert 'height' not in plot.model_dump()
+    assert list(tmp_path.iterdir()) == []
+    assert render_parameters() == ['self', 'plot', 'width', 'height']
+    source = Path(renderer_module.__file__).read_text()
+    assert 'bbox_inches' not in source
+    assert 'rcParams' not in source
+    assert not hasattr(axes, 'palette')
+
+# ** test: title_and_subtitle_use_declared_text_and_sizes
+def test_title_and_subtitle_use_declared_text_and_sizes(monkeypatch):
+    '''
+    A present title and description are drawn at the declared sizes and family.
+    '''
+
+    # No size fields. The catalog name is not the title.
+    plot = Plot(
+        name='Sales by Region',
+        title='Quarterly sales, 2024',
+        description='Revenue compared across regions.',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    subtitle = subtitles(axes)
+
+    # Absent sizes are 12 and 10, in sans-serif. The name is not a second title.
+    assert image_data(png)
+    assert axes.title.get_text() == 'Quarterly sales, 2024'
+    assert axes.title.get_fontsize() == 12
+    assert axes.title.get_fontfamily() == ['sans-serif']
+    assert len(subtitle) == 1
+    assert subtitle[0].get_text() == 'Revenue compared across regions.'
+    assert subtitle[0].get_fontsize() == 10
+    assert subtitle[0].get_fontfamily() == ['sans-serif']
+    assert plot.id not in axes.title.get_text()
+    assert plot.model_dump() == before
+    assert plot.title_size is None
+    assert plot.font_family is None
+
+    # A present size and family are used, and stay stored.
+    styled = Plot(
+        name='Sales by Region',
+        title='Quarterly sales, 2024',
+        description='Revenue compared across regions.',
+        title_size=14,
+        font_family='serif',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    styled_before = styled.model_dump()
+    png, figure, axes, figsize = draw(styled, monkeypatch)
+    renderer = figure.canvas.get_renderer()
+    title_box = axes.title.get_window_extent(renderer)
+    subtitle_box = subtitles(axes)[0].get_window_extent(renderer)
+    axes_box = axes.get_window_extent(renderer)
+
+    # The subtitle sits under the title. The stored values are unchanged.
+    assert axes.title.get_text() == 'Quarterly sales, 2024'
+    assert axes.title.get_fontsize() == 14
+    assert axes.title.get_fontfamily() == ['serif']
+    assert subtitles(axes)[0].get_fontfamily() == ['serif']
+    assert subtitle_box.y1 <= title_box.y0 + 1
+    assert subtitle_box.y0 >= axes_box.y1 - 1
+    assert styled.model_dump() == styled_before
+
+# ** test: absent_title_draws_the_name_and_blank_description_draws_no_subtitle
+def test_absent_title_draws_the_name_and_blank_description_draws_no_subtitle(
+        monkeypatch):
+    '''
+    An absent title draws the catalog name. A blank description draws no subtitle.
+    '''
+
+    # A blank description is not a subtitle. Render does not add a subtitle field.
+    plot = Plot(
+        name='Sales by Region',
+        description='   ',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert plot.title is None
+    assert 'subtitle' not in type(plot).model_fields
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+
+    # The name is the title for this picture only. It is not written back.
+    assert axes.title.get_text() == 'Sales by Region'
+    assert subtitles(axes) == []
+    assert plot.model_dump() == before
+    assert plot.title is None
+    assert plot.description == before['description']
+
+# ** test: unit_is_composed_beside_the_title_at_draw_time
+def test_unit_is_composed_beside_the_title_at_draw_time(monkeypatch):
+    '''
+    A unit sits beside its title in the picture and stays apart on the record.
+    '''
+
+    # No separator field. Absent axis-label size stays absent.
+    plot = Plot(
+        name='Sales by Region',
+        kind='line',
+        x_title='Year',
+        x_unit='USD',
+        y_title='Revenue',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert 'separator' not in type(plot).model_fields
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+
+    # The picture composes the pair. The record does not.
+    assert axes.xaxis.label.get_text() == 'Year (USD)'
+    assert axes.yaxis.label.get_text() == 'Revenue'
+    assert axes.xaxis.label.get_fontsize() == 10
+    assert axes.yaxis.label.get_fontsize() == 10
+    assert axes.xaxis.label.get_rotation() == 0
+    assert plot.model_dump() == before
+    assert plot.x_title == 'Year'
+    assert plot.x_unit == 'USD'
+    assert plot.axis_label_size is None
+
+# ** test: legend_reads_declared_text_and_absent_defaults
+def test_legend_reads_declared_text_and_absent_defaults(monkeypatch):
+    '''
+    An absent legend is drawn from the series name, and is not written back.
+    '''
+
+    # One series. Absent show, location, and size stay absent.
+    plot = line_plot()
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    legend = axes.get_legend()
+    renderer = figure.canvas.get_renderer()
+    legend_box = legend.get_window_extent(renderer)
+    axes_box = axes.get_window_extent(renderer)
+
+    # Upper right, inside the axes, 10 points, one column, no title.
+    assert [text.get_text() for text in legend.get_texts()] == ['Revenue']
+    assert legend.get_texts()[0].get_fontsize() == 10
+    assert legend._ncols == 1
+    assert legend.get_title().get_text() == ''
+    assert legend_box.x1 <= axes_box.x1 + 1
+    assert legend_box.y1 <= axes_box.y1 + 1
+    assert legend_box.x0 > (axes_box.x0 + axes_box.x1) / 2
+    assert legend_box.y0 > (axes_box.y0 + axes_box.y1) / 2
+    assert plot.model_dump() == before
+    assert plot.show_legend is None
+    assert plot.legend_location is None
+    assert plot.legend_size is None
+
+    # False hides the legend and does not clear a stored place or title.
+    hidden = Plot(
+        name='Sales by Region',
+        kind='line',
+        show_legend=False,
+        legend_location='lower_left',
+        legend_title='Series',
+        series=[
+            Series(
+                name='Revenue',
+                legend_label='Quarterly revenue',
+                marks=line_marks(),
+            ),
+        ],
+    )
+    hidden_before = hidden.model_dump()
+    png, figure, axes, figsize = draw(hidden, monkeypatch)
+    assert axes.get_legend() is None
+    assert hidden.model_dump() == hidden_before
+
+    # Two series are two entries, in record order, even when the text matches.
+    paired = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(
+                name='Revenue',
+                legend_label='Quarterly revenue',
+                marks=line_marks(),
+            ),
+            Series(
+                name='Cost',
+                legend_label='Quarterly revenue',
+                marks=line_marks(y=(5, 6)),
+            ),
+        ],
+    )
+    paired_before = paired.model_dump()
+    png, figure, axes, figsize = draw(paired, monkeypatch)
+    labels = [text.get_text() for text in axes.get_legend().get_texts()]
+    assert labels == ['Quarterly revenue', 'Quarterly revenue']
+    assert paired.series[0].legend_label == 'Quarterly revenue'
+    assert paired.series[0].name == 'Revenue'
+    assert paired.model_dump() == paired_before
+    assert 'run-1' not in labels
+
+# ** test: outside_right_legend_stays_inside_the_requested_figure
+def test_outside_right_legend_stays_inside_the_requested_figure(monkeypatch):
+    '''
+    outside_right sits beside the axes, inside the requested figure.
+    '''
+
+    # The token is not a margin field and is not rewritten.
+    plot = Plot(
+        name='Sales by Region',
+        kind='line',
+        legend_location='outside_right',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    assert 'margin' not in type(plot).model_fields
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch, width=8, height=4)
+    legend = axes.get_legend()
+    renderer = figure.canvas.get_renderer()
+    legend_box = legend.get_window_extent(renderer)
+    axes_box = axes.get_window_extent(renderer)
+    gap = (legend_box.x0 - axes_box.x1) * 72 / figure.dpi
+    top = (legend_box.y1 - axes_box.y1) * 72 / figure.dpi
+
+    # Four points to the right, top-aligned, still inside the requested inches.
+    assert gap == pytest.approx(4, abs=0.5)
+    assert top == pytest.approx(0, abs=0.5)
+    assert legend_box.x0 > axes_box.x1
+    assert legend_box.x1 <= figure.get_figwidth() * figure.dpi + 1
+    assert figsize == (8, 4)
+    assert tuple(figure.get_size_inches()) == (8, 4)
+    assert png_size(png) == (round(8 * figure.dpi), round(4 * figure.dpi))
+    assert plot.model_dump() == before
+    assert plot.legend_location == 'outside_right'
+
+# ** test: absent_color_uses_the_cycle_and_a_name_is_not_written_back
+def test_absent_color_uses_the_cycle_and_a_name_is_not_written_back(monkeypatch):
+    '''
+    Absent color is the cycle hex. A name is mapped and not written back.
+    '''
+
+    # Neither series carries a color. The index is the series position.
+    plot = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+            Series(name='Cost', marks=line_marks(y=(5, 6))),
+        ],
+    )
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    assert axes.lines[0].get_color() == '#1f77b4'
+    assert axes.lines[1].get_color() == '#ff7f0e'
+    assert plot.series[0].color is None
+    assert plot.series[1].color is None
+    assert plot.model_dump() == before
+
+    # A present color does not shift the next series off its index.
+    indexed = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(name='Revenue', color='red', marks=line_marks()),
+            Series(name='Cost', marks=line_marks(y=(5, 6))),
+        ],
+    )
+    png, figure, axes, figsize = draw(indexed, monkeypatch)
+    assert axes.lines[1].get_color() == '#ff7f0e'
+    assert indexed.series[1].color is None
+
+    # A supplied name is drawn as hex and stays a name. A hex stays a hex.
+    named = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(name='Revenue', color='red', marks=line_marks()),
+            Series(name='Cost', color='#ff0000', marks=line_marks(y=(5, 6))),
+        ],
+    )
+    named_before = named.model_dump()
+    png, figure, axes, figsize = draw(named, monkeypatch)
+    assert axes.lines[0].get_color() == '#ff0000'
+    assert axes.lines[1].get_color() == '#ff0000'
+    assert named.series[0].color == 'red'
+    assert named.series[1].color == '#ff0000'
+    assert named.model_dump() == named_before
+
+    # The dictionary is the sixteen names. grey is not a key. There is no second map.
+    colors = renderer_module.CSS_COLOR_HEX
+    assert set(colors) == {
+        'aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime',
+        'maroon', 'navy', 'olive', 'purple', 'red', 'silver', 'teal',
+        'white', 'yellow',
+    }
+    assert colors['red'] == '#ff0000'
+    assert 'grey' not in colors
+    source = Path(renderer_module.__file__).read_text()
+    assert source.count("'aqua'") == 1
+    package = Path(tiferet_plot.__file__).parent
+    assert not (package / 'assets').exists()
+    assert not (package / 'assets.py').exists()
+
+# ** test: line_and_scatter_style_defaults_are_not_written_back
+def test_line_and_scatter_style_defaults_are_not_written_back(
+        monkeypatch, tmp_path):
+    '''
+    Absent line and scatter style is drawn and not stored.
+    '''
+
+    # A line with no style fields is solid, 1.5, and has no marker.
+    plot = line_plot()
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    line = axes.lines[0]
+    assert line.get_linestyle() in ('solid', '-')
+    assert line.get_linewidth() == 1.5
+    assert line.get_marker() in (None, 'None', 'none')
+    assert plot.model_dump() == before
+    assert plot.series[0].linestyle is None
+    assert plot.series[0].linewidth is None
+    assert plot.series[0].marker is None
+
+    # circle stays circle. Absent markersize is 6 points. dashed is not rewritten.
+    marked = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(
+                name='Revenue',
+                marker='circle',
+                linestyle='dashed',
+                marks=line_marks(),
+            ),
+        ],
+    )
+    marked_before = marked.model_dump()
+    calls = []
+    axes_cls = type(axes)
+    real = axes_cls.plot
+
+    def spy(self, *args, **kwargs):
+        '''
+        Record the line arguments and delegate.
+
+        :param self: The axes.
+        :type self: Any
+        :param args: Positional arguments.
+        :type args: tuple
+        :param kwargs: Keyword arguments.
+        :type kwargs: dict
+        :return: The drawn lines.
+        :rtype: list
+        '''
+
+        # The stored word is what the tool receives. It is not rewritten to --.
+        calls.append(kwargs)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(axes_cls, 'plot', spy)
+    png, figure, axes, figsize = draw(marked, monkeypatch)
+    assert calls[0]['linestyle'] == 'dashed'
+    assert calls[0]['marker'] == 'o'
+    assert calls[0]['markersize'] == 6
+    assert marked.series[0].marker == 'circle'
+    assert marked.series[0].markersize is None
+    assert marked.series[0].linestyle == 'dashed'
+    assert marked.model_dump() == marked_before
+
+    # An absent scatter marker draws circle and does not store circle.
+    scatter_calls = []
+    real_scatter = axes_cls.scatter
+
+    def spy_scatter(self, *args, **kwargs):
+        '''
+        Record the scatter arguments and delegate.
+
+        :param self: The axes.
+        :type self: Any
+        :param args: Positional arguments.
+        :type args: tuple
+        :param kwargs: Keyword arguments.
+        :type kwargs: dict
+        :return: The collection.
+        :rtype: Any
+        '''
+
+        # The tool code is o. The record does not gain circle.
+        scatter_calls.append(kwargs)
+        return real_scatter(self, *args, **kwargs)
+
+    monkeypatch.setattr(axes_cls, 'scatter', spy_scatter)
+    absent = line_plot(kind='scatter')
+    absent_before = absent.model_dump()
+    draw(absent, monkeypatch)
+    assert scatter_calls[0]['marker'] == 'o'
+    assert scatter_calls[0]['s'] == 36
+    assert absent.series[0].marker is None
+    assert absent.model_dump() == absent_before
+
+    # no_marker draws nothing and stays no_marker.
+    scatter_calls.clear()
+    bare = Plot(
+        name='Sales by Region',
+        kind='scatter',
+        series=[
+            Series(name='Revenue', marker='no_marker', marks=line_marks()),
+        ],
+    )
+    bare_before = bare.model_dump()
+    draw(bare, monkeypatch)
+    assert scatter_calls[0]['marker'] == 'none'
+    assert bare.series[0].marker == 'no_marker'
+    assert bare.model_dump() == bare_before
+
+    # A scatter that carries linestyle fails, and no picture is returned.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(renderer_module, 'Figure', refuse_figure)
+    illegal = Plot.model_construct(
+        id='sales_by_region',
+        name='Sales by Region',
+        kind='scatter',
+        description=None,
+        series=[
+            Series.model_construct(
+                id='revenue',
+                name='Revenue',
+                marks=line_marks(),
+                linestyle='solid',
+            ),
+        ],
+    )
+    with pytest.raises(ValueError):
+        MatplotlibRenderer().render(illegal, 8, 4)
+    assert list(tmp_path.iterdir()) == []
+
+# ** test: grouped_bars_keep_the_slot_shift_and_category_ticks
+def test_grouped_bars_keep_the_slot_shift_and_category_ticks(monkeypatch):
+    '''
+    Two bar series sit beside each other. A scale changes width, not shift.
+    '''
+
+    # Absent bar width, rotation, and tick size stay absent.
+    plot = Plot(
+        name='Sales by Region',
+        kind='bar',
+        series=[
+            Series(name='Revenue', marks=bar_marks()),
+            Series(name='Cost', marks=bar_marks(height=(8, 9))),
+        ],
+    )
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    first, second = axes.containers
+    north = first.patches[0]
+    south = first.patches[1]
+    other = second.patches[0]
+
+    # Slot width is 0.4. The shift centers the pair on the category tick.
+    assert north.get_width() == pytest.approx(0.4)
+    assert north.get_x() + north.get_width() / 2 == pytest.approx(-0.2)
+    assert south.get_x() + south.get_width() / 2 == pytest.approx(0.8)
+    assert other.get_x() + other.get_width() / 2 == pytest.approx(0.2)
+    assert [label.get_text() for label in axes.get_xticklabels()] == [
+        'North',
+        'South',
+    ]
+    assert axes.get_xticklabels()[0].get_fontsize() == 8
+    assert axes.get_xticklabels()[0].get_rotation() == 45
+    assert axes.get_xticklabels()[0].get_ha() == 'right'
+    assert plot.model_dump() == before
+    assert plot.series[0].bar_width is None
+    assert plot.x_tick_rotation is None
+    assert plot.tick_label_size is None
+
+    # A scale of 2 draws width 0.8 at the same shift. A stored 1 stays 1.
+    scaled = Plot(
+        name='Sales by Region',
+        kind='bar',
+        x_tick_rotation=0,
+        series=[
+            Series(name='Revenue', bar_width=1, marks=bar_marks()),
+            Series(name='Cost', bar_width=2, marks=bar_marks(height=(8, 9))),
+        ],
+    )
+    scaled_before = scaled.model_dump()
+    png, figure, axes, figsize = draw(scaled, monkeypatch)
+    first, second = axes.containers
+    assert first.patches[0].get_width() == pytest.approx(0.4)
+    assert second.patches[0].get_width() == pytest.approx(0.8)
+    assert second.patches[0].get_x() + second.patches[0].get_width() / 2 == (
+        pytest.approx(0.2)
+    )
+    assert axes.get_xticklabels()[0].get_rotation() == 0
+    assert scaled.series[0].bar_width == 1
+    assert scaled.series[1].bar_width == 2
+    assert scaled.x_tick_rotation == 0
+    assert scaled.model_dump() == scaled_before
+
+# ** test: text_axis_ticks_and_point_labels_are_drawing_policy
+def test_text_axis_ticks_and_point_labels_are_drawing_policy(monkeypatch):
+    '''
+    Text x is tick text. A point label is beside the point, not a tick.
+    '''
+
+    # Rotation and size are absent. The second label is an empty string.
+    plot = Plot(
+        name='Sales by Region',
+        kind='line',
+        series=[
+            Series(
+                name='Revenue',
+                marks=[
+                    Mark(role='x', values=('alpha', 'beta')),
+                    Mark(role='y', values=(3, 4)),
+                    Mark(role='label', values=('run-1', '')),
+                ],
+            ),
+        ],
+    )
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    labels = point_labels(axes)
+
+    # Text ticks are 45 and 8. Numeric y ticks are 0 and 8. None is written back.
+    assert [label.get_text() for label in axes.get_xticklabels()] == [
+        'alpha',
+        'beta',
+    ]
+    assert axes.get_xticklabels()[0].get_rotation() == 45
+    assert axes.get_xticklabels()[0].get_fontsize() == 8
+    assert axes.get_yticklabels()[0].get_rotation() == 0
+    assert axes.get_yticklabels()[0].get_fontsize() == 8
+    assert len(labels) == 1
+    assert labels[0].get_text() == 'run-1'
+    assert labels[0].get_fontsize() == 8
+    assert labels[0].get_rotation() == 0
+    assert labels[0].xyann == (4, 4)
+    assert axes.title.get_text() != 'run-1'
+    assert 'run-1' not in [
+        label.get_text() for label in axes.get_xticklabels()
+    ]
+    assert [text.get_text() for text in axes.get_legend().get_texts()] == [
+        'Revenue',
+    ]
+    assert plot.model_dump() == before
+    assert list(plot.series[0].marks[0].values) == ['alpha', 'beta']
+
+    # A stored rotation of 90 does not rotate the point label.
+    turned = Plot(
+        name='Sales by Region',
+        kind='line',
+        x_tick_rotation=90,
+        series=plot.series,
+    )
+    turned_before = turned.model_dump()
+    png, figure, axes, figsize = draw(turned, monkeypatch)
+    assert axes.get_xticklabels()[0].get_rotation() == 90
+    assert point_labels(axes)[0].get_rotation() == 0
+    assert turned.x_tick_rotation == 90
+    assert turned.model_dump() == turned_before
+
+# ** test: decimal_count_formats_numeric_ticks_and_is_not_written_back
+def test_decimal_count_formats_numeric_ticks_and_is_not_written_back(monkeypatch):
+    '''
+    A stored decimal count formats a numeric axis. Absent does not.
+    '''
+
+    # Absent is not stored as 0, and it does not set a format.
+    plot = line_plot()
+    before = plot.model_dump()
+    png, figure, axes, figsize = draw(plot, monkeypatch)
+    assert type(axes.xaxis.get_major_formatter()).__name__ != 'FormatStrFormatter'
+    assert plot.x_tick_decimals is None
+    assert plot.model_dump() == before
+    assert not any('format' in name for name in type(plot).model_fields)
+
+    # Zero shows no digits after the decimal and stays 0.
+    zero = Plot(
+        name='Sales by Region',
+        kind='line',
+        x_tick_decimals=0,
+        y_tick_decimals=2,
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    zero_before = zero.model_dump()
+    png, figure, axes, figsize = draw(zero, monkeypatch)
+    assert axes.xaxis.get_major_formatter().fmt == '%.0f'
+    assert axes.xaxis.get_major_formatter()(4) == '4'
+    assert '.' not in axes.xaxis.get_major_formatter()(4)
+    assert axes.yaxis.get_major_formatter().fmt == '%.2f'
+    assert axes.yaxis.get_major_formatter()(3) == '3.00'
+    assert zero.x_tick_decimals == 0
+    assert zero.model_dump() == zero_before
+
+    # On a bar, x decimals do not format category and are not cleared.
+    bars = Plot(
+        name='Sales by Region',
+        kind='bar',
+        x_tick_decimals=2,
+        series=[
+            Series(name='Revenue', marks=bar_marks()),
+        ],
+    )
+    bars_before = bars.model_dump()
+    png, figure, axes, figsize = draw(bars, monkeypatch)
+    assert [label.get_text() for label in axes.get_xticklabels()] == [
+        'North',
+        'South',
+    ]
+    assert bars.x_tick_decimals == 2
+    assert bars.model_dump() == bars_before
+
+# ** test: text_on_both_axes_or_a_bar_label_returns_no_picture
+def test_text_on_both_axes_or_a_bar_label_returns_no_picture(
+        monkeypatch, tmp_path):
+    '''
+    Text x with text y fails. A bar that carries label fails. No picture.
+    '''
+
+    # Declaration is bypassed. Render still does not derive an id or rename a role.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(renderer_module, 'Figure', refuse_figure)
+    both = illegal_record(
+        'line',
+        [
+            Mark(role='x', values=('alpha', 'beta')),
+            Mark(role='y', values=('one', 'two')),
+        ],
+    )
+    labeled = illegal_record(
+        'bar',
+        bar_marks() + [Mark(role='label', values=('North', 'South'))],
+    )
+    with pytest.raises(ValueError):
+        MatplotlibRenderer().render(both, 8, 4)
+    with pytest.raises(ValueError):
+        MatplotlibRenderer().render(labeled, 8, 4)
+    assert both.id == 'sales_by_region'
+    assert [mark.role for mark in labeled.series[0].marks] == [
+        'category',
+        'height',
+        'label',
+    ]
+    assert list(tmp_path.iterdir()) == []
