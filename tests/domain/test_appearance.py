@@ -354,6 +354,52 @@ def test_font_legend_and_forbidden_fields():
         with pytest.raises(ValidationError):
             declared_plot(**fields)
 
+    # A bypassed token is refused by the record and is not rewritten.
+    bypassed = Plot.model_construct(
+        id='sales_by_region',
+        name='Sales by Region',
+        kind='line',
+        description=None,
+        title=None,
+        series=[Series(name='Revenue', marks=line_marks())],
+        legend_location='best',
+        axis_label_size=None,
+        tick_label_size=None,
+    )
+    with pytest.raises(ModelError) as caught:
+        bypassed.require_legend_location()
+    assert caught.value.error_code == 'LEGEND_LOCATION_NOT_DECLARED'
+    assert bypassed.legend_location == 'best'
+    bypassed.legend_location = 'outside_right'
+    bypassed.require_legend_location()
+    bypassed.legend_location = None
+    bypassed.require_legend_location()
+    grid = PlotMatrix.model_construct(
+        id='sales_by_region',
+        name='Sales by Region',
+        description=None,
+        title=None,
+        rows=1,
+        cols=1,
+        cells=[],
+        legend_location='best',
+    )
+    with pytest.raises(ModelError):
+        grid.require_legend_location()
+    assert grid.legend_location == 'best'
+
+    # The aggregate inherits the reading. The matrix does not gain axis insets.
+    assert PlotAggregate.require_legend_location is Plot.require_legend_location
+    assert not hasattr(PlotMatrix, 'axis_insets')
+    before = declared_plot().model_dump()
+    plot = declared_plot()
+    left, bottom = plot.axis_insets('Year (USD)', 'Revenue', 45)
+    assert left > 0
+    assert bottom > 0
+    assert plot.model_dump() == before
+    assert plot.axis_label_size is None
+    assert plot.tick_label_size is None
+
 # ** test: sizes_rotations_decimals_and_extra_fields_fail
 def test_sizes_rotations_decimals_and_extra_fields_fail():
     '''
