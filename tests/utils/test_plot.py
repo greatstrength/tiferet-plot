@@ -365,6 +365,146 @@ def refuse_figure(*args, **kwargs):
     # A refused size or record must not construct a figure.
     raise AssertionError('renderer started a picture')
 
+# ** function: draw_matrix
+def draw_matrix(matrix, monkeypatch, width=8, height=6):
+    '''
+    Render one matrix and return the picture, the figure, and the size.
+
+    :param matrix: The declared matrix.
+    :type matrix: PlotMatrix
+    :param monkeypatch: The pytest monkeypatch fixture.
+    :type monkeypatch: Any
+    :param width: The picture width, in inches.
+    :type width: float
+    :param height: The picture height, in inches.
+    :type height: float
+    :return: The PNG bytes, the figure, the requested size, and render calls.
+    :rtype: tuple
+    '''
+
+    # Keep the figure the renderer built. Do not import the drawing tool here.
+    figures = []
+    real = renderer_module.Figure
+
+    def spy(*args, **kwargs):
+        '''
+        Record the figure and delegate.
+
+        :param args: Figure arguments.
+        :type args: tuple
+        :param kwargs: Figure keyword arguments.
+        :type kwargs: dict
+        :return: The figure.
+        :rtype: Any
+        '''
+
+        # One matrix is one figure. The size is the caller's pair.
+        figure = real(*args, **kwargs)
+        figures.append((figure, kwargs.get('figsize')))
+        return figure
+
+    monkeypatch.setattr(renderer_module, 'Figure', spy)
+    renderer = MatplotlibRenderer()
+    calls = []
+
+    def wrapped(*args, **kwargs):
+        '''
+        Record a render call. The grid must not make one.
+
+        :param args: Render arguments.
+        :type args: tuple
+        :param kwargs: Render keyword arguments.
+        :type kwargs: dict
+        :return: Nothing. The call is recorded and refused.
+        :rtype: None
+        '''
+
+        # A cell is not a second picture.
+        calls.append((args, kwargs))
+        raise AssertionError('render_matrix called render')
+
+    renderer.render = wrapped
+    png = renderer.render_matrix(matrix, width, height)
+
+    # Return the picture and the artists that drew it.
+    figure, figsize = figures[0]
+    return png, figure, figsize, calls
+
+# ** function: drawn_text
+def drawn_text(figure) -> list:
+    '''
+    Return every text string the picture drew.
+
+    :param figure: The drawn figure.
+    :type figure: Any
+    :return: Text strings, including empty artists.
+    :rtype: list
+    '''
+
+    # Figure text, axes text, and legend text. A missing artist is not a string.
+    texts = [text.get_text() for text in figure.texts]
+    suptitle = getattr(figure, '_suptitle', None)
+    if suptitle is not None:
+        texts.append(suptitle.get_text())
+    for axes in figure.axes:
+        texts.append(axes.title.get_text())
+        texts.append(axes.xaxis.label.get_text())
+        texts.append(axes.yaxis.label.get_text())
+        texts.extend(label.get_text() for label in axes.get_xticklabels())
+        texts.extend(label.get_text() for label in axes.get_yticklabels())
+        texts.extend(text.get_text() for text in axes.texts)
+        legend = axes.get_legend()
+        if legend is not None:
+            texts.extend(text.get_text() for text in legend.get_texts())
+            texts.append(legend.get_title().get_text())
+    for legend in figure.legends:
+        texts.extend(text.get_text() for text in legend.get_texts())
+        texts.append(legend.get_title().get_text())
+    return texts
+
+# ** function: axes_inches
+def axes_inches(figure, axes) -> tuple:
+    '''
+    Return an axes box in inches.
+
+    :param figure: The drawn figure.
+    :type figure: Any
+    :param axes: The axes.
+    :type axes: Any
+    :return: Left, bottom, width, and height, in inches.
+    :rtype: tuple
+    '''
+
+    # Figure fractions become inches. The figure size is the requested pair.
+    pos = axes.get_position()
+    return (
+        pos.x0 * figure.get_figwidth(),
+        pos.y0 * figure.get_figheight(),
+        pos.width * figure.get_figwidth(),
+        pos.height * figure.get_figheight(),
+    )
+
+# ** function: area_inches
+def area_inches(figure) -> tuple:
+    '''
+    Return the outer edges of the drawn subplots, in inches.
+
+    A full grid's outer edges are the subplot area.
+
+    :param figure: The drawn figure.
+    :type figure: Any
+    :return: Left, bottom, right, and top, in inches.
+    :rtype: tuple
+    '''
+
+    # The outer edges include the gap between slots. They are not one cell.
+    boxes = [axes_inches(figure, axes) for axes in figure.axes]
+    left = min(box[0] for box in boxes)
+    bottom = min(box[1] for box in boxes)
+    right = max(box[0] + box[2] for box in boxes)
+    top = max(box[1] + box[3] for box in boxes)
+    return left, bottom, right, top
+
 # *** tests
 
 # ** test: line_and_scatter_render_from_x_and_y
@@ -575,10 +715,10 @@ def test_drawing_tool_is_not_a_package_export():
     assert 'matplotlib' not in imported
     assert 'utils' not in imported
 
-# ** test: render_matrix_calls_render_once_per_occupied_cell
-def test_render_matrix_calls_render_once_per_occupied_cell(tmp_path, monkeypatch):
+# ** test: render_matrix_does_not_call_render
+def test_render_matrix_does_not_call_render(tmp_path, monkeypatch):
     '''
-    A grid is one PNG. render is called once per occupied cell, not for an empty position.
+    A grid is one PNG. render is not called, and an empty position is not a subplot.
     '''
 
     # One occupied cell in a 2 by 2 grid. The record has not been kept.
@@ -587,32 +727,31 @@ def test_render_matrix_calls_render_once_per_occupied_cell(tmp_path, monkeypatch
     matrix = occupied_matrix([plot])
     renderer = MatplotlibRenderer()
     calls = []
-    real_render = renderer.render
 
     def wrapped(record, width, height):
         '''
-        Count render calls and delegate to the real method.
+        Fail if the grid draws a cell by calling render.
 
         :param record: The cell plot.
         :type record: Plot
-        :param width: The picture width passed through.
+        :param width: The picture width.
         :type width: float
-        :param height: The picture height passed through.
+        :param height: The picture height.
         :type height: float
-        :return: The cell picture.
-        :rtype: bytes
+        :return: Nothing. The call is a failure.
+        :rtype: None
         '''
 
-        # Record the object and the pair. Do not invent a cell size.
+        # A cell is a subplot. It is not a second picture.
         calls.append((record, width, height))
-        return real_render(record, width, height)
+        raise AssertionError('render_matrix called render')
 
     renderer.render = wrapped
     grid = renderer.render_matrix(matrix, 8, 6)
-    alone = real_render(plot, 8, 6)
+    alone = MatplotlibRenderer().render(plot, 8, 6)
 
-    # One call, on that cell's plot, with the same pair. The grid is not that cell.
-    assert calls == [(plot, 8, 6)]
+    # No call. One picture. The grid is not that cell's picture.
+    assert calls == []
     assert grid.startswith(PNG_SIGNATURE)
     assert grid.count(b'IEND') == 1
     assert image_data(grid)
@@ -620,10 +759,10 @@ def test_render_matrix_calls_render_once_per_occupied_cell(tmp_path, monkeypatch
     assert list(tmp_path.iterdir()) == []
     assert render_parameters() == ['self', 'plot', 'width', 'height']
 
-# ** test: same_plot_id_is_rendered_twice
-def test_same_plot_id_is_rendered_twice():
+# ** test: same_plot_id_is_two_subplots
+def test_same_plot_id_is_two_subplots(monkeypatch):
     '''
-    Two cells with the same plot id cause two render calls.
+    Two cells with the same plot id are two subplots. render is not called.
     '''
 
     # Same id, different payloads. Each cell is drawn from the record it carries.
@@ -637,37 +776,16 @@ def test_same_plot_id_is_rendered_twice():
         ],
     )
     matrix = occupied_matrix([first, second])
-    renderer = MatplotlibRenderer()
-    calls = []
-    real_render = renderer.render
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
 
-    def wrapped(record, width, height):
-        '''
-        Count render calls and delegate to the real method.
-
-        :param record: The cell plot.
-        :type record: Plot
-        :param width: The picture width passed through.
-        :type width: float
-        :param height: The picture height passed through.
-        :type height: float
-        :return: The cell picture.
-        :rtype: bytes
-        '''
-
-        # Do not collapse the two placements into one call or two sizes.
-        calls.append((record, width, height))
-        return real_render(record, width, height)
-
-    renderer.render = wrapped
-    grid = renderer.render_matrix(matrix, 8, 6)
-
-    # Two calls, two objects, one pair, one picture.
-    assert calls == [(first, 8, 6), (second, 8, 6)]
-    assert calls[0][0] is not calls[1][0]
-    assert calls[0][0].id == calls[1][0].id
-    assert image_data(grid)
-    assert grid.count(b'IEND') == 1
+    # Two subplots, two objects, one picture. The id is not a merge key.
+    assert calls == []
+    assert len(figure.axes) == 2
+    assert first is not second
+    assert first.id == second.id
+    assert image_data(png)
+    assert png.count(b'IEND') == 1
+    assert figsize == (8, 6)
 
 # ** test: render_matrix_fails_when_a_cell_fails
 def test_render_matrix_fails_when_a_cell_fails(tmp_path, monkeypatch):
@@ -728,23 +846,13 @@ def test_no_event_imports_the_utility_or_returns_png():
         assert 'MatplotlibRenderer' not in source
         assert 'png' not in source.lower()
 
-# ** test: render_matrix_does_not_draw_the_grid_title
-def test_render_matrix_does_not_draw_the_grid_title():
+# ** test: grid_title_changes_the_picture
+def test_grid_title_changes_the_picture():
     '''
-    A matrix title does not change the pasted cell picture.
+    A matrix title is figure text. It changes the picture and is not written back.
     '''
 
-    # This RFP does not draw a grid title, a grid legend, or grid spacing.
-    matrix_source = inspect.getsource(MatplotlibRenderer.render_matrix)
-    for name in (
-        'row_spacing',
-        'col_spacing',
-        'show_legend',
-        '.name',
-    ):
-        assert name not in matrix_source
-
-    # The cells are the same record. The grid title is not drawn on the paste.
+    # The cells are the same record. The figure title is not a cell title.
     plain = line_plot()
     matrix = occupied_matrix([plain])
     titled_grid = PlotMatrix(
@@ -755,10 +863,15 @@ def test_render_matrix_does_not_draw_the_grid_title():
         cols=2,
         cells=matrix.cells,
     )
+    before = titled_grid.model_dump()
     renderer = MatplotlibRenderer()
-    assert image_data(renderer.render_matrix(matrix, 8, 6)) == image_data(
-        renderer.render_matrix(titled_grid, 8, 6),
-    )
+    plain_png = renderer.render_matrix(matrix, 8, 6)
+    titled_png = renderer.render_matrix(titled_grid, 8, 6)
+
+    # The title is in the picture. The stored title is unchanged.
+    assert image_data(plain_png) != image_data(titled_png)
+    assert titled_grid.model_dump() == before
+    assert titled_grid.title == 'Quarterly sales by region'
 
 # ** test: requested_size_changes_the_picture
 def test_requested_size_changes_the_picture(tmp_path, monkeypatch):
@@ -888,8 +1001,8 @@ def test_matrix_picture_is_one_requested_size(monkeypatch):
     assert image_data(second) != image_data(other)
     assert png_size(first) == png_size(second)
     assert png_size(second) != png_size(other)
-    assert one_sizes == [(8, 6), (8, 6)]
-    assert two_sizes == [(8, 6), (8, 6), (8, 6)]
+    assert one_sizes == [(8, 6)]
+    assert two_sizes == [(8, 6)]
     assert (4, 3) not in one_sizes
     source = Path(renderer_module.__file__).read_text()
     assert '4 * cols' not in source
@@ -1570,3 +1683,776 @@ def test_text_on_both_axes_or_a_bar_label_returns_no_picture(
         'label',
     ]
     assert list(tmp_path.iterdir()) == []
+
+# ** test: one_occupied_corner_is_one_subplot
+def test_one_occupied_corner_is_one_subplot(tmp_path, monkeypatch):
+    '''
+    One occupied cell is one subplot. Empty corners have no axes and are not spanned.
+    '''
+
+    # Row 0, column 1. The other three positions are the absence of a cell.
+    monkeypatch.chdir(tmp_path)
+    plot = line_plot()
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=2,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=1, plot=plot),
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch, width=8, height=6)
+    alone = MatplotlibRenderer().render(plot, 8, 6)
+    one = grid(1, 1)
+    two = grid(2, 2, [line_plot(), line_plot(y=(30, 40))])
+    same = MatplotlibRenderer().render_matrix(one, 8, 6)
+    other_grid = MatplotlibRenderer().render_matrix(two, 8, 6)
+    other_size = MatplotlibRenderer().render_matrix(two, 5, 7)
+
+    # One subplot, in the right-hand top slot. It does not span the empty corners.
+    assert calls == []
+    assert image_data(png)
+    assert image_data(png) != image_data(alone)
+    assert len(figure.axes) == 1
+    assert figure.axes[0].title.get_text() == ''
+    pos = figure.axes[0].get_position()
+    assert pos.x0 > 0.5
+    assert pos.y0 > 0.5
+    assert pos.width < 0.5
+    assert pos.height < 0.5
+    assert figsize == (8, 6)
+    assert tuple(figure.get_size_inches()) == (8, 6)
+    assert png_size(same) == png_size(other_grid)
+    assert image_data(other_grid) != image_data(other_size)
+    assert matrix.model_dump() == before
+    assert 'width' not in matrix.model_dump()
+    assert 'height' not in matrix.model_dump()
+    assert list(tmp_path.iterdir()) == []
+
+# ** test: absent_grid_title_draws_the_name_and_not_the_cell_text
+def test_absent_grid_title_draws_the_name_and_not_the_cell_text(monkeypatch):
+    '''
+    An absent grid title draws the matrix name. A cell's text is not the figure title.
+    '''
+
+    # No size fields. The cell title is not drawn inside the grid.
+    cell = Plot(
+        id='revenue_plot',
+        name='Revenue',
+        title='Quarterly cell',
+        description='A cell claim.',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    matrix = PlotMatrix(
+        id='grid-id',
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=cell),
+        ],
+    )
+    assert matrix.title is None
+    before = matrix.model_dump()
+    cell_before = cell.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    texts = drawn_text(figure)
+
+    # 12 points, sans-serif. The name is not written into title. The id is not drawn.
+    assert image_data(png)
+    assert figure._suptitle.get_text() == 'Sales by Region'
+    assert figure._suptitle.get_fontsize() == 12
+    assert figure._suptitle.get_fontfamily() == ['sans-serif']
+    assert 'A cell claim.' not in texts
+    assert 'Quarterly cell' not in texts
+    assert 'grid-id' not in texts
+    assert all(axes.title.get_text() == '' for axes in figure.axes)
+    assert matrix.model_dump() == before
+    assert matrix.title is None
+    assert matrix.title_size is None
+    assert matrix.font_family is None
+    assert cell.model_dump() == cell_before
+
+# ** test: present_grid_title_and_subtitle_use_matrix_sizes
+def test_present_grid_title_and_subtitle_use_matrix_sizes(monkeypatch):
+    '''
+    A present title and description are the figure title and the subtitle under it.
+    '''
+
+    # The catalog name is not a second title. The stored sizes stay stored.
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        title='Quarterly sales by region',
+        description='Revenue compared across regions.',
+        title_size=14,
+        subtitle_size=11,
+        font_family='serif',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    subtitle = [
+        text for text in figure.texts
+        if text.get_text() == 'Revenue compared across regions.'
+    ]
+    renderer = figure.canvas.get_renderer()
+    title_box = figure._suptitle.get_window_extent(renderer)
+    subtitle_box = subtitle[0].get_window_extent(renderer)
+    axes_box = figure.axes[0].get_window_extent(renderer)
+
+    # The subtitle sits under the title and above the subplot. Values are unchanged.
+    assert figure._suptitle.get_text() == 'Quarterly sales by region'
+    assert figure._suptitle.get_fontsize() == 14
+    assert figure._suptitle.get_fontfamily() == ['serif']
+    assert len(subtitle) == 1
+    assert subtitle[0].get_fontsize() == 11
+    assert subtitle[0].get_fontfamily() == ['serif']
+    assert subtitle_box.y1 <= title_box.y0 + 1
+    assert subtitle_box.y0 >= axes_box.y1 - 1
+    assert 'Sales by Region' not in [
+        figure._suptitle.get_text(),
+        subtitle[0].get_text(),
+    ]
+    assert matrix.model_dump() == before
+
+    # A blank title is read as absent. A blank description draws no subtitle.
+    blank = PlotMatrix.model_construct(
+        id='sales_by_region',
+        name='Sales by Region',
+        title='   ',
+        description='   ',
+        rows=1,
+        cols=1,
+        cells=matrix.cells,
+        show_legend=None,
+        legend_location=None,
+        legend_title=None,
+        title_size=None,
+        subtitle_size=None,
+        legend_size=None,
+        font_family=None,
+        row_spacing=None,
+        col_spacing=None,
+    )
+    blank_before = blank.model_dump()
+    png, figure, figsize, calls = draw_matrix(blank, monkeypatch)
+    assert figure._suptitle.get_text() == 'Sales by Region'
+    assert '   ' not in drawn_text(figure)
+    assert blank.model_dump() == blank_before
+    assert blank.title == '   '
+    assert blank.description == '   '
+
+# ** test: cell_axis_text_is_subplot_text
+def test_cell_axis_text_is_subplot_text(monkeypatch):
+    '''
+    A cell's axis text is that subplot's label. render of the plot alone still titles it.
+    '''
+
+    # No separator field. The matrix does not carry the cell's axis text.
+    plot = Plot(
+        name='Revenue',
+        title='Quarterly cell',
+        kind='line',
+        x_title='Year',
+        x_unit='USD',
+        y_title='Revenue',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=plot),
+        ],
+    )
+    assert 'separator' not in type(plot).model_fields
+    assert 'x_title' not in type(matrix).model_fields
+    before = plot.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    axes = figure.axes[0]
+
+    # The composed label is subplot text. It is not written back.
+    assert axes.xaxis.label.get_text() == 'Year (USD)'
+    assert axes.yaxis.label.get_text() == 'Revenue'
+    assert axes.xaxis.label.get_fontsize() == 10
+    assert axes.yaxis.label.get_fontsize() == 10
+    assert axes.get_xticklabels()
+    assert plot.model_dump() == before
+    assert plot.x_title == 'Year'
+    assert plot.x_unit == 'USD'
+    assert plot.axis_label_size is None
+
+    # A lone render still draws the plot title. It gains no hide flag.
+    alone_png, alone_figure, alone_axes, alone_size = draw(plot, monkeypatch)
+    assert alone_axes.title.get_text() == 'Quarterly cell'
+    assert 'hide' not in render_parameters()
+    assert 'Quarterly cell' not in drawn_text(figure)
+
+# ** test: a_cell_legend_is_not_drawn_in_the_grid
+def test_a_cell_legend_is_not_drawn_in_the_grid(monkeypatch):
+    '''
+    A cell legend is not drawn, whether the cell asks or not. The fields stay.
+    '''
+
+    # Absent and true are the same for this picture. Neither is cleared.
+    absent = Plot(
+        name='Revenue',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    asked = Plot(
+        name='Cost',
+        kind='line',
+        show_legend=True,
+        legend_location='lower_left',
+        series=[
+            Series(name='Cost', marks=line_marks(y=(5, 6))),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=0, plot=absent),
+            MatrixCell(row=0, col=1, plot=asked),
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+
+    # No axes legend, and no grid legend. The cell flags are unchanged.
+    assert figure.legends == []
+    assert [axes.get_legend() for axes in figure.axes] == [None, None]
+    assert matrix.model_dump() == before
+    assert absent.show_legend is None
+    assert asked.show_legend is True
+    assert asked.legend_location == 'lower_left'
+
+# ** test: absent_or_false_grid_legend_is_not_drawn
+def test_absent_or_false_grid_legend_is_not_drawn(monkeypatch):
+    '''
+    An absent grid legend stays absent. False draws none and does not clear a place.
+    '''
+
+    # Absent is not stored as false.
+    absent = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    absent_before = absent.model_dump()
+    png, figure, figsize, calls = draw_matrix(absent, monkeypatch)
+    assert figure.legends == []
+    assert absent.show_legend is None
+    assert absent.model_dump() == absent_before
+
+    # A stored place stays, and it is not drawn.
+    hidden = PlotMatrix(
+        name='Sales by Region',
+        show_legend=False,
+        legend_location='lower_left',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    hidden_before = hidden.model_dump()
+    png, figure, figsize, calls = draw_matrix(hidden, monkeypatch)
+    assert figure.legends == []
+    assert hidden.show_legend is False
+    assert hidden.legend_location == 'lower_left'
+    assert hidden.model_dump() == hidden_before
+
+# ** test: grid_legend_is_the_union_at_the_upper_right
+def test_grid_legend_is_the_union_at_the_upper_right(monkeypatch):
+    '''
+    A requested grid legend is one union, inside the subplot area, not inside a cell.
+    '''
+
+    # Stored bottom-first. The union order is row, then column.
+    cost = Plot(
+        name='Cost plot',
+        kind='line',
+        series=[
+            Series(name='Cost', marks=line_marks(y=(5, 6))),
+        ],
+    )
+    revenue = Plot(
+        name='Revenue plot',
+        kind='line',
+        series=[
+            Series(name='Revenue', marks=line_marks()),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        show_legend=True,
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=1, plot=cost),
+            MatrixCell(row=0, col=0, plot=revenue),
+        ],
+    )
+    assert 'legend_entries' not in type(matrix).model_fields
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    legend = figure.legends[0]
+    renderer = figure.canvas.get_renderer()
+    legend_box = legend.get_window_extent(renderer)
+    left, bottom, right, top = area_inches(figure)
+    legend_left = legend_box.x0 / figure.dpi
+    legend_bottom = legend_box.y0 / figure.dpi
+    legend_right = legend_box.x1 / figure.dpi
+    legend_top = legend_box.y1 / figure.dpi
+
+    # Upper right of the subplot area, 10 points, one column, sans-serif.
+    assert [text.get_text() for text in legend.get_texts()] == [
+        'Revenue',
+        'Cost',
+    ]
+    assert legend.get_texts()[0].get_fontsize() == 10
+    assert legend.get_texts()[0].get_fontfamily() == ['sans-serif']
+    assert legend._ncols == 1
+    assert legend.get_title().get_text() == ''
+    assert legend_right <= right + 0.02
+    assert legend_top <= top + 0.02
+    assert legend_left > (left + right) / 2
+    assert legend_bottom > (bottom + top) / 2
+    assert [axes.get_legend() for axes in figure.axes] == [None, None]
+    assert matrix.model_dump() == before
+    assert matrix.show_legend is True
+    assert matrix.legend_location is None
+    assert matrix.legend_size is None
+    assert matrix.legend_title is None
+
+# ** test: the_first_series_owns_a_repeated_legend_text
+def test_the_first_series_owns_a_repeated_legend_text(monkeypatch):
+    '''
+    Two series with the same legend text are one entry. The first owns the handle.
+    '''
+
+    # Same swatch, different stroke width. The later cell is stored first.
+    later = Plot(
+        name='Later',
+        kind='line',
+        series=[
+            Series(
+                name='Later',
+                legend_label='Revenue',
+                color='red',
+                linewidth=1,
+                marks=line_marks(y=(5, 6)),
+            ),
+        ],
+    )
+    first = Plot(
+        name='First',
+        kind='line',
+        series=[
+            Series(
+                name='First',
+                legend_label='Revenue',
+                color='red',
+                linewidth=4,
+                marks=line_marks(),
+            ),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        show_legend=True,
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=1, plot=later),
+            MatrixCell(row=0, col=0, plot=first),
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    legend = figure.legends[0]
+
+    # One entry. The handle is the owning series, not a stored list.
+    assert [text.get_text() for text in legend.get_texts()] == ['Revenue']
+    assert legend.legend_handles[0].get_linewidth() == 4
+    assert matrix.model_dump() == before
+    assert first.series[0].legend_label == 'Revenue'
+    assert first.series[0].name == 'First'
+
+# ** test: legend_title_is_drawn_only_when_present
+def test_legend_title_is_drawn_only_when_present(monkeypatch):
+    '''
+    An absent legend title is not filled from the name. A present title uses legend size.
+    '''
+
+    # The matrix name is not a legend title.
+    plain = PlotMatrix(
+        name='Sales by Region',
+        show_legend=True,
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    plain_before = plain.model_dump()
+    png, figure, figsize, calls = draw_matrix(plain, monkeypatch)
+    assert figure.legends[0].get_title().get_text() == ''
+    assert plain.legend_title is None
+    assert plain.model_dump() == plain_before
+
+    # A present title is drawn at the legend size, for the title and the entries.
+    titled = PlotMatrix(
+        name='Sales by Region',
+        show_legend=True,
+        legend_title='Series',
+        legend_size=13,
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    titled_before = titled.model_dump()
+    png, figure, figsize, calls = draw_matrix(titled, monkeypatch)
+    legend = figure.legends[0]
+    assert legend.get_title().get_text() == 'Series'
+    assert legend.get_title().get_fontsize() == 13
+    assert legend.get_texts()[0].get_fontsize() == 13
+    assert titled.model_dump() == titled_before
+
+# ** test: outside_right_grid_legend_stays_inside_the_requested_figure
+def test_outside_right_grid_legend_stays_inside_the_requested_figure(
+        monkeypatch):
+    '''
+    outside_right sits beside the subplot area, inside the requested figure.
+    '''
+
+    # The token is not a margin field and is not rewritten.
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        show_legend=True,
+        legend_location='outside_right',
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+            MatrixCell(row=0, col=1, plot=line_plot(y=(30, 40))),
+        ],
+    )
+    assert 'margin' not in type(matrix).model_fields
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch, width=8, height=6)
+    legend = figure.legends[0]
+    renderer = figure.canvas.get_renderer()
+    legend_box = legend.get_window_extent(renderer)
+    left, bottom, right, top = area_inches(figure)
+    gap = legend_box.x0 / figure.dpi - right
+    top_delta = legend_box.y1 / figure.dpi - top
+    source = Path(renderer_module.__file__).read_text()
+
+    # Four points to the right, top-aligned, still the requested inches.
+    assert gap * 72 == pytest.approx(4, abs=0.5)
+    assert top_delta * 72 == pytest.approx(0, abs=0.5)
+    assert legend_box.x0 > right * figure.dpi
+    assert legend_box.x1 <= figure.get_figwidth() * figure.dpi + 1
+    assert figsize == (8, 6)
+    assert tuple(figure.get_size_inches()) == (8, 6)
+    assert png_size(png) == (round(8 * figure.dpi), round(6 * figure.dpi))
+    assert matrix.legend_location == 'outside_right'
+    assert matrix.model_dump() == before
+    assert 'tight_layout' not in source
+    assert 'constrained_layout' not in source
+    assert 'bbox_inches' not in source
+    assert 'imshow' not in source
+
+# ** test: cell_color_uses_the_cell_index_and_the_one_dictionary
+def test_cell_color_uses_the_cell_index_and_the_one_dictionary(monkeypatch):
+    '''
+    A name is mapped and not written back. The cycle index stays inside the cell.
+    '''
+
+    # The second cell's first series is index 0 in that cell, not index 2 of the grid.
+    named = Plot(
+        name='Named',
+        kind='line',
+        series=[
+            Series(name='Revenue', color='red', marks=line_marks()),
+            Series(name='Cost', marks=line_marks(y=(5, 6))),
+        ],
+    )
+    plain = Plot(
+        name='Plain',
+        kind='line',
+        series=[
+            Series(name='Other', marks=line_marks(y=(7, 8))),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=0, plot=named),
+            MatrixCell(row=0, col=1, plot=plain),
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    first, second = figure.axes
+
+    # red stays red. The next cell starts the cycle again.
+    assert first.lines[0].get_color() == '#ff0000'
+    assert first.lines[1].get_color() == '#ff7f0e'
+    assert second.lines[0].get_color() == '#1f77b4'
+    assert named.series[0].color == 'red'
+    assert named.series[1].color is None
+    assert plain.series[0].color is None
+    assert matrix.model_dump() == before
+    assert renderer_module.CSS_COLOR_HEX['red'] == '#ff0000'
+    package = Path(tiferet_plot.__file__).parent
+    assert not (package / 'assets').exists()
+    assert Path(renderer_module.__file__).read_text().count("'aqua'") == 1
+
+# ** test: grouped_bars_and_point_labels_stay_inside_the_cell
+def test_grouped_bars_and_point_labels_stay_inside_the_cell(monkeypatch):
+    '''
+    Grouped bars and point labels use the cell drawing rules. A second cell does not share them.
+    '''
+
+    # Absent bar width, rotation, and tick size stay absent.
+    bars = Plot(
+        name='Bars',
+        kind='bar',
+        series=[
+            Series(name='Revenue', marks=bar_marks()),
+            Series(name='Cost', marks=bar_marks(height=(8, 9))),
+        ],
+    )
+    other = Plot(
+        name='Other',
+        kind='bar',
+        series=[
+            Series(
+                name='East',
+                marks=bar_marks(category=('East', 'West'), height=(1, 2)),
+            ),
+        ],
+    )
+    labeled = Plot(
+        name='Labeled',
+        kind='line',
+        font_family='serif',
+        x_title='Year',
+        series=[
+            Series(
+                name='Revenue',
+                marks=[
+                    Mark(role='x', values=(1, 2)),
+                    Mark(role='y', values=(3, 4)),
+                    Mark(role='label', values=('run-1', '')),
+                ],
+            ),
+        ],
+    )
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=2,
+        cells=[
+            MatrixCell(row=0, col=0, plot=bars),
+            MatrixCell(row=0, col=1, plot=other),
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    bar_axes = figure.axes[0]
+    other_axes = figure.axes[1]
+
+    # Slot width is 0.4. The second cell keeps its own categories.
+    assert bar_axes.containers[0].patches[0].get_width() == pytest.approx(0.4)
+    assert [label.get_text() for label in bar_axes.get_xticklabels()] == [
+        'North',
+        'South',
+    ]
+    assert bar_axes.get_xticklabels()[0].get_rotation() == 45
+    assert bar_axes.get_xticklabels()[0].get_fontsize() == 8
+    assert bar_axes.get_xticklabels()[0].get_ha() == 'right'
+    assert [label.get_text() for label in other_axes.get_xticklabels()] == [
+        'East',
+        'West',
+    ]
+    assert bars.series[0].bar_width is None
+    assert bars.x_tick_rotation is None
+    assert bars.tick_label_size is None
+    assert matrix.model_dump() == before
+
+    # The point label is beside the point. It is not the figure title.
+    labeled_matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        cells=[
+            MatrixCell(row=0, col=0, plot=labeled),
+        ],
+    )
+    labeled_before = labeled.model_dump()
+    png, figure, figsize, calls = draw_matrix(labeled_matrix, monkeypatch)
+    labels = point_labels(figure.axes[0])
+    assert len(labels) == 1
+    assert labels[0].get_text() == 'run-1'
+    assert labels[0].get_fontsize() == 8
+    assert labels[0].get_rotation() == 0
+    assert labels[0].xyann == (4, 4)
+    assert labels[0].get_fontfamily() == ['serif']
+    assert figure.axes[0].xaxis.label.get_fontfamily() == ['serif']
+    assert figure.axes[0].get_xticklabels()[0].get_fontfamily() == ['serif']
+    assert figure._suptitle.get_text() == 'Sales by Region'
+    assert figure._suptitle.get_fontfamily() == ['sans-serif']
+    assert figure._suptitle.get_text() != 'run-1'
+    assert 'run-1' not in [
+        label.get_text() for label in figure.axes[0].get_xticklabels()
+    ]
+    assert labeled.font_family == 'serif'
+    assert labeled_matrix.font_family is None
+    assert labeled.model_dump() == labeled_before
+
+# ** test: spacing_is_a_fraction_of_the_declared_slot
+def test_spacing_is_a_fraction_of_the_declared_slot(monkeypatch):
+    '''
+    Absent spacing is the fraction 0.2. A stored fraction stays that fraction.
+    '''
+
+    # Four occupied cells, so the gap between them is the declared fraction.
+    plots = [line_plot(y=(3 + index, 4 + index)) for index in range(4)]
+    matrix = PlotMatrix(
+        name='Sales by Region',
+        rows=2,
+        cols=2,
+        cells=[
+            MatrixCell(row=index // 2, col=index % 2, plot=plot)
+            for index, plot in enumerate(plots)
+        ],
+    )
+    before = matrix.model_dump()
+    png, figure, figsize, calls = draw_matrix(matrix, monkeypatch)
+    boxes = sorted(
+        [axes_inches(figure, axes) for axes in figure.axes],
+        key=lambda box: (-box[1], box[0]),
+    )
+    col_gap = (boxes[1][0] - (boxes[0][0] + boxes[0][2])) / boxes[0][2]
+    row_gap = (boxes[0][1] - (boxes[2][1] + boxes[2][3])) / boxes[0][3]
+
+    # 0.2 of the slot, not inches, and not written back.
+    assert col_gap == pytest.approx(0.2)
+    assert row_gap == pytest.approx(0.2)
+    assert matrix.row_spacing is None
+    assert matrix.col_spacing is None
+    assert matrix.model_dump() == before
+
+    # A stored 0 is a gap of zero. 0.5 stays 0.5.
+    spaced = PlotMatrix(
+        name='Sales by Region',
+        rows=2,
+        cols=2,
+        row_spacing=0,
+        col_spacing=0.5,
+        cells=matrix.cells,
+    )
+    spaced_before = spaced.model_dump()
+    png, figure, figsize, calls = draw_matrix(spaced, monkeypatch)
+    boxes = sorted(
+        [axes_inches(figure, axes) for axes in figure.axes],
+        key=lambda box: (-box[1], box[0]),
+    )
+    col_gap = (boxes[1][0] - (boxes[0][0] + boxes[0][2])) / boxes[0][2]
+    row_gap = (boxes[0][1] - (boxes[2][1] + boxes[2][3])) / boxes[0][3]
+    assert col_gap == pytest.approx(0.5)
+    assert row_gap == pytest.approx(0)
+    assert spaced.row_spacing == 0
+    assert spaced.col_spacing == 0.5
+    assert spaced.model_dump() == spaced_before
+
+    # A 1-by-1 may carry a gap. The drawer does not fail.
+    single = PlotMatrix(
+        name='Sales by Region',
+        rows=1,
+        cols=1,
+        row_spacing=0.5,
+        col_spacing=0.5,
+        cells=[
+            MatrixCell(row=0, col=0, plot=line_plot()),
+        ],
+    )
+    png, figure, figsize, calls = draw_matrix(single, monkeypatch)
+    assert len(figure.axes) == 1
+    assert single.row_spacing == 0.5
+    assert single.col_spacing == 0.5
+
+# ** test: a_cell_that_cannot_be_drawn_returns_no_grid
+def test_a_cell_that_cannot_be_drawn_returns_no_grid(tmp_path, monkeypatch):
+    '''
+    A bar that carries label, or text on both axes, makes the grid fail.
+    '''
+
+    # Declaration is bypassed. No partial grid and no file.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(renderer_module, 'Figure', refuse_figure)
+    labeled = illegal_record(
+        'bar',
+        bar_marks() + [Mark(role='label', values=('North', 'South'))],
+    )
+    both = illegal_record(
+        'line',
+        [
+            Mark(role='x', values=('alpha', 'beta')),
+            Mark(role='y', values=('one', 'two')),
+        ],
+    )
+    for bad in (labeled, both):
+        matrix = PlotMatrix.model_construct(
+            id='sales_by_region',
+            name='Sales by Region',
+            description=None,
+            rows=1,
+            cols=2,
+            cells=[
+                MatrixCell(row=0, col=0, plot=line_plot()),
+                MatrixCell.model_construct(row=0, col=1, plot=bad),
+            ],
+            show_legend=None,
+            legend_location=None,
+            legend_title=None,
+            title_size=None,
+            subtitle_size=None,
+            legend_size=None,
+            font_family=None,
+            row_spacing=None,
+            col_spacing=None,
+        )
+        with pytest.raises(ModelError):
+            MatplotlibRenderer().render_matrix(matrix, 8, 6)
+    assert list(tmp_path.iterdir()) == []
+    source = inspect.getsource(MatplotlibRenderer.render_matrix)
+    assert 'self.render' not in source
+    assert 'PlotService' not in source
+    assert 'MatrixService' not in source

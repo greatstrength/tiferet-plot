@@ -183,6 +183,14 @@ GRID_LEGEND_SWATCHES_DISAGREE_MESSAGE = (
     'Grid legend text {text} has disagreeing swatches.'
 )
 
+# ** constant: legend_location_not_declared_id
+LEGEND_LOCATION_NOT_DECLARED_ID = 'LEGEND_LOCATION_NOT_DECLARED'
+
+# ** constant: legend_location_not_declared_message
+LEGEND_LOCATION_NOT_DECLARED_MESSAGE = (
+    'Legend location {location} is not a declared place.'
+)
+
 # *** functions
 
 # ** function: _is_blank
@@ -773,6 +781,32 @@ def _normalize_color(value: Any) -> Any:
 
     # A name stays a name. It is not replaced by a hex.
     return name
+
+# ** function: _require_legend_location
+def _require_legend_location(record) -> None:
+    '''
+    Refuse a legend place that is not one of the declared tokens.
+
+    ``outside_right`` is a declared place. ``best`` is not. The record
+    is not rewritten to a tool spelling.
+
+    :param record: The plot or matrix whose legend place is read.
+    :type record: Any
+    :return: None
+    :rtype: None
+    '''
+
+    # An absent place is legal. An unknown token is not stored as a default.
+    location = record.legend_location
+    if location is not None and location not in LEGEND_LOCATIONS:
+        ModelError.raise_error(
+            LEGEND_LOCATION_NOT_DECLARED_ID,
+            message=LEGEND_LOCATION_NOT_DECLARED_MESSAGE.format(
+                location=location,
+            ),
+            model=record,
+            location=location,
+        )
 
 # *** models
 
@@ -1378,6 +1412,66 @@ class Plot(DomainObject):
         # Description stays as stored. Blank text is not a subtitle.
         return _subtitle_text(self.description)
 
+    # * method: require_legend_location
+    def require_legend_location(self) -> None:
+        '''
+        Refuse a legend place that is not one of the declared tokens.
+
+        The field validator still rejects a bad token at declaration.
+        This reading is for a record that bypassed that check. The
+        token is not rewritten, and an absent place is legal.
+
+        :return: None
+        :rtype: None
+        '''
+
+        # The closed set includes outside_right. best is not a fallback.
+        _require_legend_location(self)
+
+    # * method: axis_insets
+    def axis_insets(self,
+            x_label,
+            y_label,
+            x_rotation) -> tuple:
+        '''
+        Return the room this plot's axis labels and tick text need.
+
+        The caller supplies the composed labels and the drawn x rotation.
+        An absent size is the drawer reading. The reading is not stored.
+
+        :param x_label: The composed x label, if any.
+        :type x_label: str | None
+        :param y_label: The composed y label, if any.
+        :type y_label: str | None
+        :param x_rotation: The drawn x tick rotation, in degrees.
+        :type x_rotation: Any
+        :return: The left inset and the bottom inset, in inches.
+        :rtype: tuple
+        '''
+
+        # An absent size is not written back. Zero stays zero.
+        axis_size = self.axis_label_size
+        if axis_size is None:
+            axis_size = 10
+        tick_size = self.tick_label_size
+        if tick_size is None:
+            tick_size = 8
+
+        # Rotated tick text needs more room than a horizontal tick.
+        bottom = (tick_size + 12) / 72
+        if x_label:
+            bottom += (axis_size + 8) / 72
+        if x_rotation:
+            bottom += abs(x_rotation) / 360 * 1.1 + (tick_size * 2) / 72
+
+        # The y label sits left of the tick text.
+        left = (tick_size * 4 + 18) / 72
+        if y_label:
+            left += (axis_size + 10) / 72
+
+        # Return the room. Do not store it.
+        return left, bottom
+
     # * method: require_kind (static)
     @staticmethod
     def require_kind(kind: str) -> str:
@@ -1803,6 +1897,22 @@ class PlotMatrix(DomainObject):
 
         # Description stays as stored. Blank text is not a subtitle.
         return _subtitle_text(self.description)
+
+    # * method: require_legend_location
+    def require_legend_location(self) -> None:
+        '''
+        Refuse a grid-legend place that is not one of the declared tokens.
+
+        The field validator still rejects a bad token at declaration.
+        This reading is for a record that bypassed that check. The
+        token is not rewritten, and an absent place is legal.
+
+        :return: None
+        :rtype: None
+        '''
+
+        # The closed set includes outside_right. best is not a fallback.
+        _require_legend_location(self)
 
     # * method: validate
     def validate(self) -> None:

@@ -433,6 +433,26 @@ def test_show_returns_the_bytes_render_returns(tmp_path):
     assert not hasattr(PlotterSessionContext, 'show_matrix')
     assert 'width' not in type(plot).model_fields
 
+# ** test: show_returns_the_bytes_render_matrix_returns
+def test_show_returns_the_bytes_render_matrix_returns(tmp_path):
+    '''
+    show of a matrix returns the bytes render_matrix returns for that pair.
+    '''
+
+    # The session does not read a size from the record, and it does not write a file.
+    path = tmp_path / 'publication.yml'
+    session = create_plotter_session(plot_config=str(path))
+    matrix = grid()
+    shown = session.show(matrix, 8, 6)
+    rendered = MatplotlibRenderer().render_matrix(matrix, 8, 6)
+
+    # The same pair is the same picture. There is no show_matrix.
+    assert shown == rendered
+    assert not path.exists()
+    assert not hasattr(PlotterSessionContext, 'show_matrix')
+    assert 'width' not in type(matrix).model_fields
+    assert 'height' not in type(matrix).model_fields
+
 # ** test: chain_create_keeps_the_settled_ids
 def test_chain_create_keeps_the_settled_ids(tmp_path):
     '''

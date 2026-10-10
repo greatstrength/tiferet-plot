@@ -1,4 +1,4 @@
-"""Matplotlib renderer for a declared plot."""
+"""Matplotlib renderer for a declared plot and a declared grid."""
 
 # *** imports
 
@@ -10,13 +10,12 @@ import os
 os.environ.setdefault('MPLBACKEND', 'Agg')
 
 # ** infra
-from matplotlib import image as mpl_image
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import FixedLocator, FormatStrFormatter
-from matplotlib.transforms import ScaledTranslation
+from matplotlib.transforms import Bbox, ScaledTranslation
 
 # ** app
 from tiferet.domain import ModelError
@@ -177,6 +176,12 @@ OUTSIDE_LEGEND_GAP = 4
 # ** constant: text_tick_rotation
 TEXT_TICK_ROTATION = 45
 
+# ** constant: right_inset
+RIGHT_INSET = 0.22
+
+# ** constant: default_grid_spacing
+DEFAULT_GRID_SPACING = 0.2
+
 # *** constants (error)
 
 # ** constant: picture_size_illegal_id
@@ -201,14 +206,6 @@ PLOT_REQUIRES_SERIES_ID = 'PLOT_REQUIRES_SERIES'
 # ** constant: plot_requires_series_message
 PLOT_REQUIRES_SERIES_MESSAGE = (
     'A plot requires at least one series.'
-)
-
-# ** constant: legend_location_not_declared_id
-LEGEND_LOCATION_NOT_DECLARED_ID = 'LEGEND_LOCATION_NOT_DECLARED'
-
-# ** constant: legend_location_not_declared_message
-LEGEND_LOCATION_NOT_DECLARED_MESSAGE = (
-    'Legend location {location} is not a declared place.'
 )
 
 # ** constant: duplicate_mark_role_id
@@ -422,28 +419,6 @@ def _supplied(value, default):
     # Return the supplied value. Do not store the default.
     return value
 
-# ** function: _font_family
-def _font_family(plot) -> str:
-    '''
-    Return the family that covers every text artist in the picture.
-
-    Absent is sans-serif. A present value is used as stored. It is not
-    written back.
-
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :return: The font family for this picture.
-    :rtype: str
-    '''
-
-    # A blank family is the same case as an omitted one.
-    family = _present(getattr(plot, 'font_family', None))
-    if family is None:
-        return DEFAULT_FONT_FAMILY
-
-    # One family covers the picture. A second family is not introduced.
-    return family
-
 # ** function: _composed_label
 def _composed_label(title, unit):
     '''
@@ -543,153 +518,6 @@ def _role_sort(role: str, values, model=None) -> str:
         role=role,
     )
 
-# ** function: _drawable_marks
-def _drawable_marks(kind: str, marks, model=None) -> dict:
-    '''
-    Return mark values when they match the kind, else refuse the picture.
-
-    Label is allowed on line and scatter. It is not allowed on a bar.
-    Text x or text y is allowed when the other axis is numeric. Text on
-    both axes is not a picture. This is not a declaration. It does not
-    derive an id or rewrite a role.
-
-    :param kind: The plot kind.
-    :type kind: str
-    :param marks: The series marks.
-    :type marks: Sequence
-    :param model: The record the refusal is raised against, if any.
-    :type model: Any
-    :return: Mark values keyed by role.
-    :rtype: dict
-    '''
-
-    # Index marks by role and reject a repeated role.
-    by_role = {}
-    for mark in marks:
-        if mark.role in by_role:
-            ModelError.raise_error(
-                DUPLICATE_MARK_ROLE_ID,
-                message=DUPLICATE_MARK_ROLE_MESSAGE.format(role=mark.role),
-                model=model,
-                role=mark.role,
-            )
-        by_role[mark.role] = mark.values
-
-    # The kind selects the roles. Label is optional. Any other extra role fails.
-    required = MARK_ROLES_BY_KIND[kind]
-    allowed = required + OPTIONAL_MARK_ROLES_BY_KIND[kind]
-    extra = [role for role in by_role if role not in allowed]
-    if extra:
-        ModelError.raise_error(
-            MARK_ROLE_NOT_ALLOWED_ID,
-            message=MARK_ROLE_NOT_ALLOWED_MESSAGE.format(
-                kind=kind,
-                role=extra[0],
-            ),
-            model=model,
-            kind=kind,
-            role=extra[0],
-        )
-
-    # Every role the drawing path reads must be present. Label may be absent.
-    missing = [role for role in required if role not in by_role]
-    if missing:
-        ModelError.raise_error(
-            MARK_ROLE_REQUIRED_ID,
-            message=MARK_ROLE_REQUIRED_MESSAGE.format(
-                kind=kind,
-                role=missing[0],
-            ),
-            model=model,
-            kind=kind,
-            role=missing[0],
-        )
-
-    # Present values must be one sort, non-empty, and the same length.
-    lengths = []
-    sorts = {}
-    for role in allowed:
-        if role not in by_role:
-            continue
-        values = by_role[role]
-        if len(values) < 1:
-            ModelError.raise_error(
-                MARK_ROLE_EMPTY_ID,
-                message=MARK_ROLE_EMPTY_MESSAGE.format(role=role),
-                model=model,
-                role=role,
-            )
-        sorts[role] = _role_sort(role, values, model=model)
-        lengths.append(len(values))
-
-    # Equal length is part of being drawable for the kind.
-    if len(set(lengths)) != 1:
-        ModelError.raise_error(
-            MARK_LENGTH_MISMATCH_ID,
-            message=MARK_LENGTH_MISMATCH_MESSAGE,
-            model=model,
-        )
-
-    # A line or a scatter still marks a quantity. Two text axes do not.
-    both_text = (
-        kind in ('line', 'scatter')
-        and sorts.get('x') == 'text'
-        and sorts.get('y') == 'text'
-    )
-    if both_text:
-        ModelError.raise_error(
-            AXIS_NOT_NUMERIC_ID,
-            message=AXIS_NOT_NUMERIC_MESSAGE.format(kind=kind),
-            model=model,
-            kind=kind,
-        )
-
-    # Return the values. Roles are unchanged.
-    return by_role
-
-# ** function: _refuse_inapplicable_style
-def _refuse_inapplicable_style(kind: str, series) -> None:
-    '''
-    Refuse a present style field the kind does not show.
-
-    An absent value is legal on every kind. A stored value the picture
-    does not show is not. The field is not cleared. No picture is returned.
-
-    :param kind: The plot kind.
-    :type kind: str
-    :param series: The series.
-    :type series: SeriesAggregate
-    :return: None
-    :rtype: None
-    '''
-
-    # The first inapplicable field fails. The value stays on the series.
-    field = None
-    if kind != 'line' and getattr(series, 'linestyle', None) is not None:
-        field = 'linestyle'
-    elif kind != 'line' and getattr(series, 'linewidth', None) is not None:
-        field = 'linewidth'
-    elif kind == 'bar' and getattr(series, 'marker', None) is not None:
-        field = 'marker'
-    elif kind == 'bar' and getattr(series, 'markersize', None) is not None:
-        field = 'markersize'
-    elif kind != 'bar' and getattr(series, 'bar_width', None) is not None:
-        field = 'bar_width'
-    if field is None:
-        return
-
-    # The kind is what makes the field illegal. Do not start a picture.
-    ModelError.raise_error(
-        SERIES_STYLE_NOT_SHOWN_ID,
-        message=SERIES_STYLE_NOT_SHOWN_MESSAGE.format(
-            kind=kind,
-            field=field,
-        ),
-        model=series,
-        kind=kind,
-        field=field,
-    )
-
 # ** function: _tool_marker
 def _tool_marker(token: str, model=None):
     '''
@@ -721,172 +549,6 @@ def _tool_marker(token: str, model=None):
 
     # Return the tool code. Do not write it back.
     return code
-
-# ** function: _drawn_color
-def _drawn_color(series, index: int) -> str:
-    '''
-    Return the color this series is drawn with.
-
-    An absent color is the cycle hex for this series' index, counting
-    from zero, modulo 10. A hex is used as stored. A name is mapped
-    through the dictionary beside this renderer. Nothing is written back.
-
-    :param series: The series.
-    :type series: SeriesAggregate
-    :param index: The series position in this plot, from zero.
-    :type index: int
-    :return: The color the tool draws.
-    :rtype: str
-    '''
-
-    # The index is the series position, not the count of omitted colors.
-    color = getattr(series, 'color', None)
-    if color is None or (isinstance(color, str) and not color.strip()):
-        return COLOR_CYCLE[index % len(COLOR_CYCLE)]
-
-    # A hex is used as stored. It is not rewritten to a name.
-    if isinstance(color, str) and color.startswith('#'):
-        return color
-
-    # A name is mapped here. The hex is not written back. grey is not a key.
-    mapped = CSS_COLOR_HEX.get(color)
-    if mapped is None:
-        ModelError.raise_error(
-            COLOR_NOT_DECLARED_ID,
-            message=COLOR_NOT_DECLARED_MESSAGE.format(color=color),
-            model=series,
-            color=color,
-        )
-
-    # Return the mapped hex. The record keeps the name.
-    return mapped
-
-# ** function: _series_style
-def _series_style(kind: str, series, index: int) -> dict:
-    '''
-    Read the style this series is drawn with.
-
-    Defaults are applied here and are not written back. A size does not
-    invent a marker. A present style the kind does not show fails.
-
-    :param kind: The plot kind.
-    :type kind: str
-    :param series: The series.
-    :type series: SeriesAggregate
-    :param index: The series position in this plot, from zero.
-    :type index: int
-    :return: The drawing style. Not a field of the record.
-    :rtype: dict
-    '''
-
-    # An inapplicable field fails before a picture starts.
-    _refuse_inapplicable_style(kind, series)
-
-    # Color is the cycle, the stored hex, or the mapped name.
-    style = {
-        'color': _drawn_color(series, index),
-        'linestyle': None,
-        'linewidth': None,
-        'marker': None,
-        'markersize': None,
-        'bar_scale': None,
-    }
-
-    # A line's absent stroke is solid at 1.5, with no marker.
-    if kind == 'line':
-        style['linestyle'] = _supplied(
-            getattr(series, 'linestyle', None),
-            DEFAULT_LINESTYLE,
-        )
-        style['linewidth'] = _supplied(
-            getattr(series, 'linewidth', None),
-            DEFAULT_LINEWIDTH,
-        )
-        marker = getattr(series, 'marker', None)
-        if marker is not None:
-            style['marker'] = _tool_marker(marker, model=series)
-
-    # A scatter's absent marker is circle. no_marker draws nothing.
-    if kind == 'scatter':
-        marker = getattr(series, 'marker', None)
-        if marker is None:
-            marker = DEFAULT_SCATTER_MARKER
-        style['marker'] = _tool_marker(marker, model=series)
-
-    # A size does not invent a marker. It applies only when one is drawn.
-    if style['marker'] is not None:
-        style['markersize'] = _supplied(
-            getattr(series, 'markersize', None),
-            DEFAULT_MARKERSIZE,
-        )
-
-    # Bar width is a scale of the slot. Absent is not stored as 1.
-    if kind == 'bar':
-        style['bar_scale'] = getattr(series, 'bar_width', None)
-
-    # Return the reading. The series fields are unchanged.
-    return style
-
-# ** function: _prepare
-def _prepare(plot: PlotAggregate) -> tuple:
-    '''
-    Read a record that can be drawn, or refuse it before a picture starts.
-
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :return: Mark values and drawing styles, one pair per series.
-    :rtype: tuple
-    '''
-
-    # A kind outside the three drawing paths is not a picture.
-    kind = plot.kind
-    if kind not in RENDER_KINDS:
-        allowed = ', '.join(RENDER_KINDS)
-        ModelError.raise_error(
-            KIND_NOT_DECLARED_ID,
-            message=KIND_NOT_DECLARED_MESSAGE.format(
-                kind=kind,
-                allowed=allowed,
-            ),
-            model=plot,
-            kind=kind,
-        )
-
-    # Nothing to draw is not an empty picture.
-    if not plot.series:
-        ModelError.raise_error(
-            PLOT_REQUIRES_SERIES_ID,
-            message=PLOT_REQUIRES_SERIES_MESSAGE,
-            model=plot,
-        )
-
-    # An unknown legend place is not a picture. best is not a fallback.
-    location = getattr(plot, 'legend_location', None)
-    if (location is not None
-            and location != 'outside_right'
-            and location not in LEGEND_TOOL_LOC):
-        ModelError.raise_error(
-            LEGEND_LOCATION_NOT_DECLARED_ID,
-            message=LEGEND_LOCATION_NOT_DECLARED_MESSAGE.format(
-                location=location,
-            ),
-            model=plot,
-            location=location,
-        )
-
-    # Check marks and style before a figure exists. Do not rename a role.
-    series_values = []
-    styles = []
-    for index, series in enumerate(plot.series):
-        series_values.append(_drawable_marks(
-            kind,
-            series.marks,
-            model=series,
-        ))
-        styles.append(_series_style(kind, series, index))
-
-    # Return the readings. Nothing has been written back.
-    return series_values, styles
 
 # ** function: _text_order
 def _text_order(series_values: list, role: str) -> list:
@@ -944,6 +606,74 @@ def _coordinates(values: dict, role: str, order) -> list:
     index = {name: position for position, name in enumerate(order)}
     return [index[value] for value in values[role]]
 
+# ** function: _fit_insets
+def _fit_insets(width: float,
+        height: float,
+        top: float,
+        right: float,
+        bottom: float,
+        left: float) -> tuple:
+    '''
+    Shrink insets that would leave no room for the picture.
+
+    The figure's inches are not changed. The inset is not a field.
+
+    :param width: The figure width, in inches.
+    :type width: float
+    :param height: The figure height, in inches.
+    :type height: float
+    :param top: The top inset, in inches.
+    :type top: float
+    :param right: The right inset, in inches.
+    :type right: float
+    :param bottom: The bottom inset, in inches.
+    :type bottom: float
+    :param left: The left inset, in inches.
+    :type left: float
+    :return: The insets that fit.
+    :rtype: tuple
+    '''
+
+    # Keep a positive box. Do not change the requested inches.
+    if left + right > width * 0.8:
+        scale = (width * 0.8) / (left + right)
+        left *= scale
+        right *= scale
+    if top + bottom > height * 0.8:
+        scale = (height * 0.8) / (top + bottom)
+        top *= scale
+        bottom *= scale
+
+    # Return the readings. Nothing is stored.
+    return top, right, bottom, left
+
+# ** function: _title_inset
+def _title_inset(title_size,
+        subtitle_size,
+        has_subtitle: bool) -> float:
+    '''
+    Return the room above an axes or a subplot area for title text.
+
+    The room is not a field. A subtitle needs room under the title.
+
+    :param title_size: The title size, in points.
+    :type title_size: Any
+    :param subtitle_size: The subtitle size, in points.
+    :type subtitle_size: Any
+    :param has_subtitle: Whether a subtitle is drawn.
+    :type has_subtitle: bool
+    :return: The top inset, in inches.
+    :rtype: float
+    '''
+
+    # The title sits above the drawn area. A subtitle needs room under it.
+    top = (title_size + 14) / 72
+    if has_subtitle:
+        top += (subtitle_size + 10) / 72
+
+    # Return the room. Do not store it.
+    return top
+
 # ** function: _set_margins
 def _set_margins(figure,
         axes,
@@ -976,14 +706,14 @@ def _set_margins(figure,
     # Shrink the inset when the figure cannot hold it. Do not change the figure.
     width = figure.get_figwidth()
     height = figure.get_figheight()
-    if left + right > width * 0.8:
-        scale = (width * 0.8) / (left + right)
-        left *= scale
-        right *= scale
-    if top + bottom > height * 0.8:
-        scale = (height * 0.8) / (top + bottom)
-        top *= scale
-        bottom *= scale
+    top, right, bottom, left = _fit_insets(
+        width,
+        height,
+        top,
+        right,
+        bottom,
+        left,
+    )
 
     # Place the axes inside the figure. The figure size is unchanged.
     axes.set_position([
@@ -992,72 +722,6 @@ def _set_margins(figure,
         1 - (left + right) / width,
         1 - (top + bottom) / height,
     ])
-
-# ** function: _place_axes
-def _place_axes(figure,
-        axes,
-        plot,
-        has_subtitle: bool,
-        x_label,
-        y_label,
-        x_rotation) -> None:
-    '''
-    Leave room for the title, the subtitle, the axis labels, and the ticks.
-
-    The room is computed at draw time. It is not a field.
-
-    :param figure: The picture.
-    :type figure: Figure
-    :param axes: The axes to place.
-    :type axes: Axes
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :param has_subtitle: Whether a subtitle is drawn.
-    :type has_subtitle: bool
-    :param x_label: The x axis label, if any.
-    :type x_label: str | None
-    :param y_label: The y axis label, if any.
-    :type y_label: str | None
-    :param x_rotation: The drawn x tick rotation, in degrees.
-    :type x_rotation: Any
-    :return: None
-    :rtype: None
-    '''
-
-    # Sizes are readings. An absent size is not written back.
-    title_size = _supplied(getattr(plot, 'title_size', None), DEFAULT_TITLE_SIZE)
-    subtitle_size = _supplied(
-        getattr(plot, 'subtitle_size', None),
-        DEFAULT_SUBTITLE_SIZE,
-    )
-    axis_size = _supplied(
-        getattr(plot, 'axis_label_size', None),
-        DEFAULT_AXIS_LABEL_SIZE,
-    )
-    tick_size = _supplied(
-        getattr(plot, 'tick_label_size', None),
-        DEFAULT_TICK_LABEL_SIZE,
-    )
-
-    # The title sits above the axes. A subtitle needs room under that title.
-    top = (title_size + 14) / 72
-    if has_subtitle:
-        top += (subtitle_size + 10) / 72
-
-    # Rotated tick text needs more room than a horizontal tick.
-    bottom = (tick_size + 12) / 72
-    if x_label:
-        bottom += (axis_size + 8) / 72
-    if x_rotation:
-        bottom += abs(x_rotation) / 360 * 1.1 + (tick_size * 2) / 72
-
-    # The y label sits left of the tick text.
-    left = (tick_size * 4 + 18) / 72
-    if y_label:
-        left += (axis_size + 10) / 72
-
-    # The right inset grows later when the legend is outside the axes.
-    _set_margins(figure, axes, top, 0.22, bottom, left)
 
 # ** function: _draw_line
 def _draw_line(axes,
@@ -1254,215 +918,6 @@ def _draw_point_labels(axes,
             va='bottom',
             annotation_clip=False,
         )
-
-# ** function: _draw_figure_text
-def _draw_figure_text(figure, axes, plot) -> bool:
-    '''
-    Draw the axes title and, when present, the subtitle under it.
-
-    The subtitle is description. There is no subtitle field. A missing
-    or blank description draws no subtitle.
-
-    :param figure: The picture.
-    :type figure: Figure
-    :param axes: The axes to title.
-    :type axes: Axes
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :return: True when a subtitle was drawn.
-    :rtype: bool
-    '''
-
-    # One family and the declared sizes. Absent sizes are not stored.
-    family = _font_family(plot)
-    title_size = _supplied(getattr(plot, 'title_size', None), DEFAULT_TITLE_SIZE)
-    subtitle = plot.subtitle_text
-    subtitle_size = _supplied(
-        getattr(plot, 'subtitle_size', None),
-        DEFAULT_SUBTITLE_SIZE,
-    )
-    pad = 6
-    if subtitle is not None:
-        pad = subtitle_size + 14
-
-    # The title is the axes title. The id is not drawn.
-    axes.set_title(
-        plot.title_text,
-        fontsize=title_size,
-        fontfamily=family,
-        pad=pad,
-    )
-    if subtitle is None:
-        return False
-
-    # The subtitle sits just above the axes, under the title.
-    transform = axes.transAxes + ScaledTranslation(
-        0,
-        2 / 72,
-        figure.dpi_scale_trans,
-    )
-    axes.text(
-        0.5,
-        1.0,
-        subtitle,
-        transform=transform,
-        ha='center',
-        va='bottom',
-        fontsize=subtitle_size,
-        fontfamily=family,
-        clip_on=False,
-    )
-    return True
-
-# ** function: _draw_axis_labels
-def _draw_axis_labels(axes, plot) -> tuple:
-    '''
-    Draw the composed axis labels. Tick rotation does not rotate them.
-
-    For a bar, x labels the category axis and y labels the height axis.
-    Those roles are not renamed.
-
-    :param axes: The axes to label.
-    :type axes: Axes
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :return: The x label and the y label, either of which may be absent.
-    :rtype: tuple
-    '''
-
-    # Compose at draw time. The record keeps title and unit apart.
-    family = _font_family(plot)
-    size = _supplied(
-        getattr(plot, 'axis_label_size', None),
-        DEFAULT_AXIS_LABEL_SIZE,
-    )
-    x_label = _composed_label(
-        getattr(plot, 'x_title', None),
-        getattr(plot, 'x_unit', None),
-    )
-    y_label = _composed_label(
-        getattr(plot, 'y_title', None),
-        getattr(plot, 'y_unit', None),
-    )
-    if x_label is not None:
-        axes.set_xlabel(x_label, fontsize=size, fontfamily=family)
-    if y_label is not None:
-        axes.set_ylabel(y_label, fontsize=size, fontfamily=family)
-
-    # Return the readings so the inset can leave room for them.
-    return x_label, y_label
-
-# ** function: _x_rotation
-def _x_rotation(plot, x_is_text: bool):
-    '''
-    Return the x tick rotation this picture uses.
-
-    Absent is 45 degrees when the x tick text is text, including bar
-    category, and 0 degrees when it is numeric. A stored 0 stays 0.
-    The value is not rewritten modulo 360, and it is not written back.
-
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :param x_is_text: Whether the x tick text is text.
-    :type x_is_text: bool
-    :return: The rotation in degrees.
-    :rtype: Any
-    '''
-
-    # A stored value is passed as stored, including zero.
-    stored = getattr(plot, 'x_tick_rotation', None)
-    if stored is not None:
-        return stored
-
-    # Text ticks, including bar category, default to 45. Numeric ticks do not.
-    if x_is_text:
-        return TEXT_TICK_ROTATION
-
-    # A numeric axis is horizontal when the rotation was omitted.
-    return 0
-
-# ** function: _y_rotation
-def _y_rotation(plot):
-    '''
-    Return the y tick rotation this picture uses.
-
-    Absent is 0 degrees. A present value is passed as stored. It is not
-    written back and not rewritten modulo 360.
-
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :return: The rotation in degrees.
-    :rtype: Any
-    '''
-
-    # A stored value is passed as stored, including a non-zero rotation.
-    stored = getattr(plot, 'y_tick_rotation', None)
-    if stored is not None:
-        return stored
-
-    # Absent y rotation is horizontal. It is not stored as 0.
-    return 0
-
-# ** function: _apply_ticks
-def _apply_ticks(axes,
-        plot,
-        x_order,
-        y_order):
-    '''
-    Set tick text, size, rotation, and a numeric format when one was stored.
-
-    Absent decimal fields do not set a format. A stored count is a
-    fixed-point pattern derived here. It is not a format-string field.
-    Category text is not formatted by ``x_tick_decimals``.
-
-    :param axes: The axes whose ticks are set.
-    :type axes: Axes
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
-    :param x_order: The x tick names, or None when x is numeric.
-    :type x_order: list | None
-    :param y_order: The y tick names, or None when y is numeric.
-    :type y_order: list | None
-    :return: The drawn x rotation.
-    :rtype: Any
-    '''
-
-    # Text ticks are the values. They are not renamed to category.
-    if x_order is not None:
-        axes.xaxis.set_major_locator(FixedLocator(list(range(len(x_order)))))
-        axes.set_xticklabels(list(x_order))
-    elif getattr(plot, 'x_tick_decimals', None) is not None:
-        places = plot.x_tick_decimals
-        axes.xaxis.set_major_formatter(FormatStrFormatter(f'%.{places}f'))
-
-    # The same rule on y. A text y axis ignores y_tick_decimals.
-    if y_order is not None:
-        axes.yaxis.set_major_locator(FixedLocator(list(range(len(y_order)))))
-        axes.set_yticklabels(list(y_order))
-    elif getattr(plot, 'y_tick_decimals', None) is not None:
-        places = plot.y_tick_decimals
-        axes.yaxis.set_major_formatter(FormatStrFormatter(f'%.{places}f'))
-
-    # One size for every tick. Rotation does not rotate the axis label.
-    tick_size = _supplied(
-        getattr(plot, 'tick_label_size', None),
-        DEFAULT_TICK_LABEL_SIZE,
-    )
-    x_rotation = _x_rotation(plot, x_order is not None)
-    y_rotation = _y_rotation(plot)
-    axes.tick_params(
-        axis='x',
-        labelsize=tick_size,
-        labelrotation=x_rotation,
-    )
-    axes.tick_params(
-        axis='y',
-        labelsize=tick_size,
-        labelrotation=y_rotation,
-    )
-
-    # Return the rotation so a non-zero x rotation can be right-aligned.
-    return x_rotation
 
 # ** function: _style_tick_labels
 def _style_tick_labels(figure,
@@ -1672,191 +1127,316 @@ def _add_legend(axes,
         title=title,
     )
 
-# ** function: _draw_legend
-def _draw_legend(figure,
-        axes,
-        plot,
-        kind: str,
-        styles: list) -> None:
+# ** function: _axis_orders
+def _axis_orders(kind: str, series_values: list) -> tuple:
     '''
-    Draw one legend entry per series, in record order, or draw none.
+    Return the text-axis orders for one plot, computed at draw time.
 
-    Absent ``show_legend`` draws the legend, including for one series.
-    False hides it and does not clear a stored location or title. Absent
-    location is upper right, inside the axes. The legend is one column.
-    There is no column-count field.
+    A bar's x order is category. A line or scatter uses x or y only when
+    that axis is text. The order is not stored.
 
-    :param figure: The picture.
-    :type figure: Figure
-    :param axes: The axes the legend belongs to.
-    :type axes: Axes
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
     :param kind: The plot kind.
     :type kind: str
-    :param styles: Drawing styles, one per series.
-    :type styles: list
-    :return: None
-    :rtype: None
+    :param series_values: Role-to-values mappings, one per series.
+    :type series_values: list
+    :return: The x order and the y order, either of which may be absent.
+    :rtype: tuple
     '''
 
-    # False hides the legend. Absent is not stored as true, and still draws.
-    if getattr(plot, 'show_legend', None) is False:
-        return
+    # Bar category is the x tick text. It is not renamed.
+    if kind == 'bar':
+        return _text_order(series_values, 'category'), None
 
-    # One entry per series. The same text is still two entries. Not a union.
-    handles = [_legend_handle(kind, style) for style in styles]
-    labels = [series.legend_text for series in plot.series]
-    size = _supplied(getattr(plot, 'legend_size', None), DEFAULT_LEGEND_SIZE)
-    family = _font_family(plot)
-    title = _present(getattr(plot, 'legend_title', None))
-    location = getattr(plot, 'legend_location', None) or 'upper_right'
-    prop = {
-        'family': family,
-        'size': size,
-    }
+    # A numeric axis has no text order. Text is first appearance in this plot.
+    x_order = None
+    y_order = None
+    if not _is_numeric(series_values[0]['x'][0]):
+        x_order = _text_order(series_values, 'x')
+    if not _is_numeric(series_values[0]['y'][0]):
+        y_order = _text_order(series_values, 'y')
+    return x_order, y_order
 
-    # outside_right is outside the axes. The other tokens stay inside.
-    if location == 'outside_right':
-        legend = _add_legend(axes, handles, labels, 'upper left', prop, title)
-        _style_legend_title(legend, title, size, family)
-        _place_outside_right(figure, axes, legend)
-        return
-
-    # An inside place stays inside the axes. best is not a fallback.
-    legend = _add_legend(
-        axes,
-        handles,
-        labels,
-        LEGEND_TOOL_LOC[location],
-        prop,
-        title,
-    )
-    _style_legend_title(legend, title, size, family)
-    legend.set_clip_on(False)
-
-# ** function: _draw
-def _draw(figure,
-        plot: PlotAggregate,
+# ** function: _draw_series
+def _draw_series(axes,
+        kind: str,
         series_values: list,
-        styles: list) -> None:
+        styles: list,
+        x_order,
+        y_order) -> list:
     '''
-    Draw one declared plot on a figure of the caller's size.
+    Draw the marks of one plot on one axes.
 
-    The figure's inches are already set. This does not write the picture
-    back onto the record, and it does not fill an omitted field.
+    The color index is the series position in this plot. Grouped bars
+    keep the slot width of one plot. Nothing is written back.
 
-    :param figure: The picture, already sized.
-    :type figure: Figure
-    :param plot: The declared plot record.
-    :type plot: PlotAggregate
+    :param axes: The axes to draw on.
+    :type axes: Axes
+    :param kind: The plot kind.
+    :type kind: str
     :param series_values: Role-to-values mappings, one per series.
     :type series_values: list
     :param styles: Drawing styles, one per series.
     :type styles: list
-    :return: None
-    :rtype: None
+    :param x_order: The text order of x, or None when x is numeric.
+    :type x_order: list | None
+    :param y_order: The text order of y, or None when y is numeric.
+    :type y_order: list | None
+    :return: Drawn positions, one pair per line or scatter series.
+    :rtype: list
     '''
-
-    # Text positions are first appearance. They are not stored.
-    axes = figure.add_subplot(111)
-    kind = plot.kind
-    family = _font_family(plot)
-    x_order = None
-    y_order = None
-    if kind == 'bar':
-        x_order = _text_order(series_values, 'category')
-    else:
-        if not _is_numeric(series_values[0]['x'][0]):
-            x_order = _text_order(series_values, 'x')
-        if not _is_numeric(series_values[0]['y'][0]):
-            y_order = _text_order(series_values, 'y')
 
     # Marks first, so the axes know their data before the text is placed.
     points = []
     if kind == 'line':
         for values, style in zip(series_values, styles):
             points.append(_draw_line(axes, values, style, x_order, y_order))
-    elif kind == 'scatter':
+        return points
+    if kind == 'scatter':
         for values, style in zip(series_values, styles):
-            points.append(_draw_scatter(axes, values, style, x_order, y_order))
-    else:
-        _draw_bars(axes, series_values, styles)
+            points.append(_draw_scatter(
+                axes,
+                values,
+                style,
+                x_order,
+                y_order,
+            ))
+        return points
 
-    # Figure text and axis labels are readings. They are not stored composed.
-    has_subtitle = _draw_figure_text(figure, axes, plot)
-    x_label, y_label = _draw_axis_labels(axes, plot)
-    x_rotation = _apply_ticks(axes, plot, x_order, y_order)
-    _place_axes(figure, axes, plot, has_subtitle, x_label, y_label, x_rotation)
+    # A bar has no point positions. The category order is already known.
+    _draw_bars(axes, series_values, styles)
+    return points
 
-    # Point labels use the drawing policy. Tick rotation does not move them.
-    if kind != 'bar':
-        for values, (xs, ys) in zip(series_values, points):
-            _draw_point_labels(axes, kind, values, xs, ys, family)
-
-    # The legend reads the record. A hidden legend is not drawn.
-    _draw_legend(figure, axes, plot, kind, styles)
-    _style_tick_labels(figure, axes, family, x_rotation)
-
-# ** function: _read_png
-def _read_png(png: bytes):
+# ** function: _figure_rect
+def _figure_rect(figure, rect: tuple) -> list:
     '''
-    Read picture bytes into an image array.
+    Convert an inch rectangle to figure fractions.
 
-    The bytes came from ``render``. They are not written to a path.
+    The figure's inches are not changed.
 
-    :param png: The picture bytes.
-    :type png: bytes
-    :return: The image array.
-    :rtype: Any
+    :param figure: The picture.
+    :type figure: Figure
+    :param rect: Left, bottom, width, and height, in inches.
+    :type rect: tuple
+    :return: The same rectangle as figure fractions.
+    :rtype: list
     '''
 
-    # Read the picture from memory. Do not place it on disk.
-    return mpl_image.imread(io.BytesIO(png), format='png')
+    # Fractions place artists. They are not a size field.
+    x, y, width, height = rect
+    fig_w = figure.get_figwidth()
+    fig_h = figure.get_figheight()
+    return [
+        x / fig_w,
+        y / fig_h,
+        width / fig_w,
+        height / fig_h,
+    ]
 
-# ** function: _compose_grid
-def _compose_grid(rows: int,
+# ** function: _cell_rect
+def _cell_rect(area: tuple,
+        rows: int,
         cols: int,
-        pictures: list,
-        width: float,
-        height: float) -> bytes:
+        row: int,
+        col: int,
+        row_spacing: float,
+        col_spacing: float) -> tuple:
     '''
-    Place occupied-cell pictures on the declared grid.
+    Return one declared slot, in inches, inside the subplot area.
 
-    Empty positions stay empty. The result is one picture, not one
-    picture per cell. Width and height are that picture's size. Rows
-    and columns place the cells. They do not choose the size. This is
-    not a subplot matrix.
+    The gap is a fraction of the average slot. The average includes the
+    space an empty corner holds. Row 0 is the top row. A cell does not
+    span a neighbor.
 
+    :param area: The subplot area, in inches.
+    :type area: tuple
     :param rows: The declared row count.
     :type rows: int
     :param cols: The declared column count.
     :type cols: int
-    :param pictures: ``(row, col, png)`` for each occupied cell.
-    :type pictures: list
-    :param width: The picture width, in inches.
-    :type width: float
-    :param height: The picture height, in inches.
-    :type height: float
-    :return: The grid as PNG bytes.
+    :param row: The cell row.
+    :type row: int
+    :param col: The cell column.
+    :type col: int
+    :param row_spacing: The row gap as a fraction of the average slot height.
+    :type row_spacing: float
+    :param col_spacing: The column gap as a fraction of the average slot width.
+    :type col_spacing: float
+    :return: Left, bottom, width, and height of the slot, in inches.
+    :rtype: tuple
+    '''
+
+    # One slot per declared position. A 1-by-1 grid has no gap to apply.
+    x0, y0, width, height = area
+    slot_w = width / (cols + (cols - 1) * col_spacing)
+    slot_h = height / (rows + (rows - 1) * row_spacing)
+    x = x0 + col * (slot_w + col_spacing * slot_w)
+    y = y0 + (rows - 1 - row) * (slot_h + row_spacing * slot_h)
+    return x, y, slot_w, slot_h
+
+# ** function: _area_window
+def _area_window(figure, area: tuple):
+    '''
+    Return the subplot area in display coordinates.
+
+    :param figure: The picture.
+    :type figure: Figure
+    :param area: The subplot area, in inches.
+    :type area: tuple
+    :return: The area box.
+    :rtype: Bbox
+    '''
+
+    # The anchor is the declared grid, including an empty corner's space.
+    return Bbox.from_bounds(*_figure_rect(figure, area)).transformed(
+        figure.transFigure,
+    )
+
+# ** function: _add_figure_legend
+def _add_figure_legend(figure,
+        handles,
+        labels,
+        loc: str,
+        prop: dict,
+        title,
+        anchor):
+    '''
+    Add one figure legend. An absent title is not passed, so none is drawn.
+
+    The legend is not an axes legend. It is one column.
+
+    :param figure: The picture.
+    :type figure: Figure
+    :param handles: One handle per union entry.
+    :type handles: list
+    :param labels: One entry per union text.
+    :type labels: list
+    :param loc: The tool location.
+    :type loc: str
+    :param prop: The font family and size.
+    :type prop: dict
+    :param title: The legend title, or None.
+    :type title: str | None
+    :param anchor: The box or point the legend is placed against.
+    :type anchor: tuple
+    :return: The legend artist.
+    :rtype: Legend
+    '''
+
+    # Omit the title argument. An empty title is not filled from the name.
+    if title is None:
+        return figure.legend(
+            handles,
+            labels,
+            loc=loc,
+            prop=prop,
+            ncol=1,
+            bbox_to_anchor=anchor,
+            bbox_transform=figure.transFigure,
+            borderaxespad=0.5,
+        )
+
+    # A present title is drawn. It is not a column-count field.
+    return figure.legend(
+        handles,
+        labels,
+        loc=loc,
+        prop=prop,
+        ncol=1,
+        bbox_to_anchor=anchor,
+        bbox_transform=figure.transFigure,
+        borderaxespad=0.5,
+        title=title,
+    )
+
+# ** function: _inset_area_for_outside_legend
+def _inset_area_for_outside_legend(figure, area: tuple, legend) -> tuple:
+    '''
+    Inset the subplot area by the legend width plus the 4-point gap.
+
+    The figure's inches do not change. The inset is not stored, and it
+    does not replace the spacing fractions.
+
+    :param figure: The picture.
+    :type figure: Figure
+    :param area: The subplot area, in inches.
+    :type area: tuple
+    :param legend: The legend artist.
+    :type legend: Legend
+    :return: The inset subplot area, in inches.
+    :rtype: tuple
+    '''
+
+    # Measure the legend, then give the area that width plus the 4-point gap.
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    legend_width = legend.get_window_extent(renderer).width / figure.dpi
+    x0, y0, width, height = area
+    new_width = width - legend_width - (OUTSIDE_LEGEND_GAP / 72)
+    minimum = figure.get_figwidth() * 0.05
+    if new_width < minimum:
+        new_width = minimum
+    return x0, y0, new_width, height
+
+# ** function: _place_legend_outside_area
+def _place_legend_outside_area(figure, area: tuple, legend) -> None:
+    '''
+    Place the legend outside the subplot area and inside the figure.
+
+    The legend's top aligns with the subplot area's top. Its left edge
+    sits 4 points to the right of that area. The figure's inches do not
+    change. The placement is not stored.
+
+    :param figure: The picture.
+    :type figure: Figure
+    :param area: The subplot area, in inches.
+    :type area: tuple
+    :param legend: The legend artist.
+    :type legend: Legend
+    :return: None
+    :rtype: None
+    '''
+
+    # Anchor the legend, then correct it so the drawn box matches the rule.
+    gap = OUTSIDE_LEGEND_GAP / 72
+    fig_w = figure.get_figwidth()
+    fig_h = figure.get_figheight()
+    anchor = _figure_rect(figure, area)
+    anchor_x = anchor[0] + anchor[2] + gap / fig_w
+    anchor_y = anchor[1] + anchor[3]
+    legend.set_loc('upper left')
+    legend.set_bbox_to_anchor(
+        (anchor_x, anchor_y),
+        transform=figure.transFigure,
+    )
+    legend.set_clip_on(False)
+    for _ in range(3):
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        legend_box = legend.get_window_extent(renderer)
+        area_box = _area_window(figure, area)
+        dx = (legend_box.x0 - area_box.x1) / figure.dpi - gap
+        dy = (legend_box.y1 - area_box.y1) / figure.dpi
+        anchor_x -= dx / fig_w
+        anchor_y -= dy / fig_h
+        legend.set_bbox_to_anchor(
+            (anchor_x, anchor_y),
+            transform=figure.transFigure,
+        )
+
+# ** function: _png_bytes
+def _png_bytes(figure) -> bytes:
+    '''
+    Return the figure as PNG bytes.
+
+    The caller places the file. The figure's inches are already set.
+
+    :param figure: The picture.
+    :type figure: Figure
+    :return: The picture as PNG bytes.
     :rtype: bytes
     '''
 
-    # Size the figure by the requested pair. An empty corner still takes a cell.
-    figure = Figure(figsize=(width, height))
-    FigureCanvasAgg(figure)
-    axes_grid = figure.subplots(nrows=rows, ncols=cols, squeeze=False)
-    for row in range(rows):
-        for col in range(cols):
-            axes_grid[row][col].set_axis_off()
-
-    # Place each occupied picture. Do not draw an empty position.
-    for row, col, png in pictures:
-        axes = axes_grid[row][col]
-        axes.imshow(_read_png(png))
-        axes.set_axis_off()
-
-    # The bytes are the grid. Where they are placed is not this service.
+    # The bytes are the picture. Where they are placed is not this service.
     buffer = io.BytesIO()
     figure.savefig(buffer, format='png')
     return buffer.getvalue()
@@ -1866,11 +1446,13 @@ def _compose_grid(rows: int,
 # ** util: matplotlib_renderer
 class MatplotlibRenderer(RendererService):
     '''
-    The first renderer. It turns a plot record into PNG bytes.
+    The first renderer. It turns a declared record into PNG bytes.
 
-    The picture is a reading of the record. It is not written back, and
-    an omitted appearance field is not filled with the default that was
-    drawn. A later drawing library is another class on the renderer service.
+    One plot is one picture. One matrix is one picture, with one subplot
+    per occupied cell. The picture is a reading of the record. It is not
+    written back, and an omitted appearance field is not filled with the
+    default that was drawn. A later drawing library is another class on
+    the renderer service.
     '''
 
     # * method: render
@@ -1900,18 +1482,19 @@ class MatplotlibRenderer(RendererService):
         # Refuse a size that is not a picture. Do not start a figure.
         _require_picture_size(width, height, model=plot)
 
+        # An unknown legend place is not a picture. best is not a fallback.
+        plot.require_legend_location()
+
         # Refuse a record this renderer cannot draw. Do not start a picture.
-        series_values, styles = _prepare(plot)
+        series_values, styles = MatplotlibRenderer._prepare(plot)
 
         # Draw at the requested size. Nothing is written to a path or the record.
         figure = Figure(figsize=(width, height))
         FigureCanvasAgg(figure)
-        _draw(figure, plot, series_values, styles)
+        MatplotlibRenderer._draw(figure, plot, series_values, styles)
 
         # The bytes are the picture. Where they are placed is not this service.
-        buffer = io.BytesIO()
-        figure.savefig(buffer, format='png')
-        return buffer.getvalue()
+        return _png_bytes(figure)
 
     # * method: render_matrix
     def render_matrix(self,
@@ -1921,12 +1504,11 @@ class MatplotlibRenderer(RendererService):
         '''
         Render a declared grid to one PNG of the given size.
 
-        Each occupied cell is drawn by ``render`` with that same width
-        and height, and placed at its row and column. An empty position
-        is not drawn. The pair is the grid picture's size, not a size
-        per cell. An unsaved matrix is a valid input. If the size is
-        illegal, or any occupied cell fails, no picture is returned.
-        This does not draw a subplot matrix, a grid title, or a grid legend.
+        One occupied cell is one subplot. An empty position has no axes.
+        The pair is the figure's size, in inches. It is not a size per
+        cell. An unsaved matrix is a valid input. If the size is illegal,
+        or any occupied cell cannot be drawn, no picture is returned and
+        no file is written. The caller places the file.
 
         :param matrix: The declared matrix.
         :type matrix: PlotMatrixAggregate
@@ -1938,23 +1520,1198 @@ class MatplotlibRenderer(RendererService):
         :rtype: bytes
         '''
 
-        # Refuse a size that is not a picture. Do not draw a cell.
+        # Refuse a size that is not a picture. Do not start a figure.
         _require_picture_size(width, height, model=matrix)
 
-        # Draw every occupied cell at that same size. A failure returns no grid.
-        pictures = []
-        for cell in matrix.cells:
-            pictures.append((
-                cell.row,
-                cell.col,
-                self.render(cell.plot, width, height),
-            ))
+        # Refuse a cell, or a legend place, that cannot be drawn.
+        prepared = MatplotlibRenderer._prepare_matrix(matrix)
 
-        # Place those pictures on one figure of the requested size.
-        return _compose_grid(
-            matrix.rows,
-            matrix.cols,
-            pictures,
+        # One figure, at the requested inches. Rows and columns are not the size.
+        figure = Figure(figsize=(width, height))
+        FigureCanvasAgg(figure)
+        MatplotlibRenderer._draw_matrix(figure, matrix, prepared)
+
+        # The bytes are the picture. Where they are placed is not this service.
+        return _png_bytes(figure)
+
+    # * method: _font_family (static)
+    @staticmethod
+    def _font_family(plot) -> str:
+        '''
+        Return the family stored on this record, or sans-serif when absent.
+
+        Absent is sans-serif. A present value is used as stored. It is not
+        written back. A matrix family does not replace a cell's family.
+
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :return: The font family for this picture.
+        :rtype: str
+        '''
+
+        # A blank family is the same case as an omitted one.
+        family = _present(getattr(plot, 'font_family', None))
+        if family is None:
+            return DEFAULT_FONT_FAMILY
+
+        # One family covers the picture. A second family is not introduced.
+        return family
+
+    # * method: _drawable_marks (static)
+    @staticmethod
+    def _drawable_marks(kind: str, marks, model=None) -> dict:
+        '''
+        Return mark values when they match the kind, else refuse the picture.
+
+        Label is allowed on line and scatter. It is not allowed on a bar.
+        Text x or text y is allowed when the other axis is numeric. Text on
+        both axes is not a picture. This is not a declaration. It does not
+        derive an id or rewrite a role.
+
+        :param kind: The plot kind.
+        :type kind: str
+        :param marks: The series marks.
+        :type marks: Sequence
+        :param model: The record the refusal is raised against, if any.
+        :type model: Any
+        :return: Mark values keyed by role.
+        :rtype: dict
+        '''
+
+        # Index marks by role and reject a repeated role.
+        by_role = {}
+        for mark in marks:
+            if mark.role in by_role:
+                ModelError.raise_error(
+                    DUPLICATE_MARK_ROLE_ID,
+                    message=DUPLICATE_MARK_ROLE_MESSAGE.format(role=mark.role),
+                    model=model,
+                    role=mark.role,
+                )
+            by_role[mark.role] = mark.values
+
+        # The kind selects the roles. Label is optional. Any other extra role fails.
+        required = MARK_ROLES_BY_KIND[kind]
+        allowed = required + OPTIONAL_MARK_ROLES_BY_KIND[kind]
+        extra = [role for role in by_role if role not in allowed]
+        if extra:
+            ModelError.raise_error(
+                MARK_ROLE_NOT_ALLOWED_ID,
+                message=MARK_ROLE_NOT_ALLOWED_MESSAGE.format(
+                    kind=kind,
+                    role=extra[0],
+                ),
+                model=model,
+                kind=kind,
+                role=extra[0],
+            )
+
+        # Every role the drawing path reads must be present. Label may be absent.
+        missing = [role for role in required if role not in by_role]
+        if missing:
+            ModelError.raise_error(
+                MARK_ROLE_REQUIRED_ID,
+                message=MARK_ROLE_REQUIRED_MESSAGE.format(
+                    kind=kind,
+                    role=missing[0],
+                ),
+                model=model,
+                kind=kind,
+                role=missing[0],
+            )
+
+        # Present values must be one sort, non-empty, and the same length.
+        lengths = []
+        sorts = {}
+        for role in allowed:
+            if role not in by_role:
+                continue
+            values = by_role[role]
+            if len(values) < 1:
+                ModelError.raise_error(
+                    MARK_ROLE_EMPTY_ID,
+                    message=MARK_ROLE_EMPTY_MESSAGE.format(role=role),
+                    model=model,
+                    role=role,
+                )
+            sorts[role] = _role_sort(role, values, model=model)
+            lengths.append(len(values))
+
+        # Equal length is part of being drawable for the kind.
+        if len(set(lengths)) != 1:
+            ModelError.raise_error(
+                MARK_LENGTH_MISMATCH_ID,
+                message=MARK_LENGTH_MISMATCH_MESSAGE,
+                model=model,
+            )
+
+        # A line or a scatter still marks a quantity. Two text axes do not.
+        both_text = (
+            kind in ('line', 'scatter')
+            and sorts.get('x') == 'text'
+            and sorts.get('y') == 'text'
+        )
+        if both_text:
+            ModelError.raise_error(
+                AXIS_NOT_NUMERIC_ID,
+                message=AXIS_NOT_NUMERIC_MESSAGE.format(kind=kind),
+                model=model,
+                kind=kind,
+            )
+
+        # Return the values. Roles are unchanged.
+        return by_role
+
+    # * method: _refuse_inapplicable_style (static)
+    @staticmethod
+    def _refuse_inapplicable_style(kind: str, series) -> None:
+        '''
+        Refuse a present style field the kind does not show.
+
+        An absent value is legal on every kind. A stored value the picture
+        does not show is not. The field is not cleared. No picture is returned.
+
+        :param kind: The plot kind.
+        :type kind: str
+        :param series: The series.
+        :type series: SeriesAggregate
+        :return: None
+        :rtype: None
+        '''
+
+        # The first inapplicable field fails. The value stays on the series.
+        field = None
+        if kind != 'line' and getattr(series, 'linestyle', None) is not None:
+            field = 'linestyle'
+        elif kind != 'line' and getattr(series, 'linewidth', None) is not None:
+            field = 'linewidth'
+        elif kind == 'bar' and getattr(series, 'marker', None) is not None:
+            field = 'marker'
+        elif kind == 'bar' and getattr(series, 'markersize', None) is not None:
+            field = 'markersize'
+        elif kind != 'bar' and getattr(series, 'bar_width', None) is not None:
+            field = 'bar_width'
+        if field is None:
+            return
+
+        # The kind is what makes the field illegal. Do not start a picture.
+        ModelError.raise_error(
+            SERIES_STYLE_NOT_SHOWN_ID,
+            message=SERIES_STYLE_NOT_SHOWN_MESSAGE.format(
+                kind=kind,
+                field=field,
+            ),
+            model=series,
+            kind=kind,
+            field=field,
+        )
+
+    # * method: _drawn_color (static)
+    @staticmethod
+    def _drawn_color(series, index: int) -> str:
+        '''
+        Return the color this series is drawn with.
+
+        An absent color is the cycle hex for this series' index, counting
+        from zero, modulo 10. A hex is used as stored. A name is mapped
+        through the dictionary beside this renderer. Nothing is written back.
+
+        :param series: The series.
+        :type series: SeriesAggregate
+        :param index: The series position in this plot, from zero.
+        :type index: int
+        :return: The color the tool draws.
+        :rtype: str
+        '''
+
+        # The index is the series position, not the count of omitted colors.
+        color = getattr(series, 'color', None)
+        if color is None or (isinstance(color, str) and not color.strip()):
+            return COLOR_CYCLE[index % len(COLOR_CYCLE)]
+
+        # A hex is used as stored. It is not rewritten to a name.
+        if isinstance(color, str) and color.startswith('#'):
+            return color
+
+        # A name is mapped here. The hex is not written back. grey is not a key.
+        mapped = CSS_COLOR_HEX.get(color)
+        if mapped is None:
+            ModelError.raise_error(
+                COLOR_NOT_DECLARED_ID,
+                message=COLOR_NOT_DECLARED_MESSAGE.format(color=color),
+                model=series,
+                color=color,
+            )
+
+        # Return the mapped hex. The record keeps the name.
+        return mapped
+
+    # * method: _series_style (static)
+    @staticmethod
+    def _series_style(kind: str, series, index: int) -> dict:
+        '''
+        Read the style this series is drawn with.
+
+        Defaults are applied here and are not written back. A size does not
+        invent a marker. A present style the kind does not show fails.
+
+        :param kind: The plot kind.
+        :type kind: str
+        :param series: The series.
+        :type series: SeriesAggregate
+        :param index: The series position in this plot, from zero.
+        :type index: int
+        :return: The drawing style. Not a field of the record.
+        :rtype: dict
+        '''
+
+        # An inapplicable field fails before a picture starts.
+        MatplotlibRenderer._refuse_inapplicable_style(kind, series)
+
+        # Color is the cycle, the stored hex, or the mapped name.
+        style = {
+            'color': MatplotlibRenderer._drawn_color(series, index),
+            'linestyle': None,
+            'linewidth': None,
+            'marker': None,
+            'markersize': None,
+            'bar_scale': None,
+        }
+
+        # A line's absent stroke is solid at 1.5, with no marker.
+        if kind == 'line':
+            style['linestyle'] = _supplied(
+                getattr(series, 'linestyle', None),
+                DEFAULT_LINESTYLE,
+            )
+            style['linewidth'] = _supplied(
+                getattr(series, 'linewidth', None),
+                DEFAULT_LINEWIDTH,
+            )
+            marker = getattr(series, 'marker', None)
+            if marker is not None:
+                style['marker'] = _tool_marker(marker, model=series)
+
+        # A scatter's absent marker is circle. no_marker draws nothing.
+        if kind == 'scatter':
+            marker = getattr(series, 'marker', None)
+            if marker is None:
+                marker = DEFAULT_SCATTER_MARKER
+            style['marker'] = _tool_marker(marker, model=series)
+
+        # A size does not invent a marker. It applies only when one is drawn.
+        if style['marker'] is not None:
+            style['markersize'] = _supplied(
+                getattr(series, 'markersize', None),
+                DEFAULT_MARKERSIZE,
+            )
+
+        # Bar width is a scale of the slot. Absent is not stored as 1.
+        if kind == 'bar':
+            style['bar_scale'] = getattr(series, 'bar_width', None)
+
+        # Return the reading. The series fields are unchanged.
+        return style
+
+    # * method: _prepare (static)
+    @staticmethod
+    def _prepare(plot: PlotAggregate) -> tuple:
+        '''
+        Read a record that can be drawn, or refuse it before a picture starts.
+
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :return: Mark values and drawing styles, one pair per series.
+        :rtype: tuple
+        '''
+
+        # A kind outside the three drawing paths is not a picture.
+        kind = plot.kind
+        if kind not in RENDER_KINDS:
+            allowed = ', '.join(RENDER_KINDS)
+            ModelError.raise_error(
+                KIND_NOT_DECLARED_ID,
+                message=KIND_NOT_DECLARED_MESSAGE.format(
+                    kind=kind,
+                    allowed=allowed,
+                ),
+                model=plot,
+                kind=kind,
+            )
+
+        # Nothing to draw is not an empty picture.
+        if not plot.series:
+            ModelError.raise_error(
+                PLOT_REQUIRES_SERIES_ID,
+                message=PLOT_REQUIRES_SERIES_MESSAGE,
+                model=plot,
+            )
+
+        # Check marks and style before a figure exists. Do not rename a role.
+        series_values = []
+        styles = []
+        for index, series in enumerate(plot.series):
+            series_values.append(MatplotlibRenderer._drawable_marks(
+                kind,
+                series.marks,
+                model=series,
+            ))
+            styles.append(MatplotlibRenderer._series_style(kind, series, index))
+
+        # Return the readings. Nothing has been written back.
+        return series_values, styles
+
+    # * method: _place_axes (static)
+    @staticmethod
+    def _place_axes(figure,
+            axes,
+            plot,
+            has_subtitle: bool,
+            x_label,
+            y_label,
+            x_rotation) -> None:
+        '''
+        Leave room for the title, the subtitle, the axis labels, and the ticks.
+
+        The room is computed at draw time. It is not a field.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param axes: The axes to place.
+        :type axes: Axes
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :param has_subtitle: Whether a subtitle is drawn.
+        :type has_subtitle: bool
+        :param x_label: The x axis label, if any.
+        :type x_label: str | None
+        :param y_label: The y axis label, if any.
+        :type y_label: str | None
+        :param x_rotation: The drawn x tick rotation, in degrees.
+        :type x_rotation: Any
+        :return: None
+        :rtype: None
+        '''
+
+        # Sizes are readings. An absent size is not written back.
+        title_size = _supplied(getattr(plot, 'title_size', None), DEFAULT_TITLE_SIZE)
+        subtitle_size = _supplied(
+            getattr(plot, 'subtitle_size', None),
+            DEFAULT_SUBTITLE_SIZE,
+        )
+        top = _title_inset(title_size, subtitle_size, has_subtitle)
+        left, bottom = plot.axis_insets(x_label, y_label, x_rotation)
+
+        # The right inset grows later when the legend is outside the axes.
+        _set_margins(figure, axes, top, RIGHT_INSET, bottom, left)
+
+    # * method: _draw_figure_text (static)
+    @staticmethod
+    def _draw_figure_text(figure, axes, plot) -> bool:
+        '''
+        Draw the axes title and, when present, the subtitle under it.
+
+        The subtitle is description. There is no subtitle field. A missing
+        or blank description draws no subtitle.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param axes: The axes to title.
+        :type axes: Axes
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :return: True when a subtitle was drawn.
+        :rtype: bool
+        '''
+
+        # One family and the declared sizes. Absent sizes are not stored.
+        family = MatplotlibRenderer._font_family(plot)
+        title_size = _supplied(getattr(plot, 'title_size', None), DEFAULT_TITLE_SIZE)
+        subtitle = plot.subtitle_text
+        subtitle_size = _supplied(
+            getattr(plot, 'subtitle_size', None),
+            DEFAULT_SUBTITLE_SIZE,
+        )
+        pad = 6
+        if subtitle is not None:
+            pad = subtitle_size + 14
+
+        # The title is the axes title. The id is not drawn.
+        axes.set_title(
+            plot.title_text,
+            fontsize=title_size,
+            fontfamily=family,
+            pad=pad,
+        )
+        if subtitle is None:
+            return False
+
+        # The subtitle sits just above the axes, under the title.
+        transform = axes.transAxes + ScaledTranslation(
+            0,
+            2 / 72,
+            figure.dpi_scale_trans,
+        )
+        axes.text(
+            0.5,
+            1.0,
+            subtitle,
+            transform=transform,
+            ha='center',
+            va='bottom',
+            fontsize=subtitle_size,
+            fontfamily=family,
+            clip_on=False,
+        )
+        return True
+
+    # * method: _draw_axis_labels (static)
+    @staticmethod
+    def _draw_axis_labels(axes, plot) -> tuple:
+        '''
+        Draw the composed axis labels. Tick rotation does not rotate them.
+
+        For a bar, x labels the category axis and y labels the height axis.
+        Those roles are not renamed.
+
+        :param axes: The axes to label.
+        :type axes: Axes
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :return: The x label and the y label, either of which may be absent.
+        :rtype: tuple
+        '''
+
+        # Compose at draw time. The record keeps title and unit apart.
+        family = MatplotlibRenderer._font_family(plot)
+        size = _supplied(
+            getattr(plot, 'axis_label_size', None),
+            DEFAULT_AXIS_LABEL_SIZE,
+        )
+        x_label = _composed_label(
+            getattr(plot, 'x_title', None),
+            getattr(plot, 'x_unit', None),
+        )
+        y_label = _composed_label(
+            getattr(plot, 'y_title', None),
+            getattr(plot, 'y_unit', None),
+        )
+        if x_label is not None:
+            axes.set_xlabel(x_label, fontsize=size, fontfamily=family)
+        if y_label is not None:
+            axes.set_ylabel(y_label, fontsize=size, fontfamily=family)
+
+        # Return the readings so the inset can leave room for them.
+        return x_label, y_label
+
+    # * method: _x_rotation (static)
+    @staticmethod
+    def _x_rotation(plot, x_is_text: bool):
+        '''
+        Return the x tick rotation this picture uses.
+
+        Absent is 45 degrees when the x tick text is text, including bar
+        category, and 0 degrees when it is numeric. A stored 0 stays 0.
+        The value is not rewritten modulo 360, and it is not written back.
+
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :param x_is_text: Whether the x tick text is text.
+        :type x_is_text: bool
+        :return: The rotation in degrees.
+        :rtype: Any
+        '''
+
+        # A stored value is passed as stored, including zero.
+        stored = getattr(plot, 'x_tick_rotation', None)
+        if stored is not None:
+            return stored
+
+        # Text ticks, including bar category, default to 45. Numeric ticks do not.
+        if x_is_text:
+            return TEXT_TICK_ROTATION
+
+        # A numeric axis is horizontal when the rotation was omitted.
+        return 0
+
+    # * method: _y_rotation (static)
+    @staticmethod
+    def _y_rotation(plot):
+        '''
+        Return the y tick rotation this picture uses.
+
+        Absent is 0 degrees. A present value is passed as stored. It is not
+        written back and not rewritten modulo 360.
+
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :return: The rotation in degrees.
+        :rtype: Any
+        '''
+
+        # A stored value is passed as stored, including a non-zero rotation.
+        stored = getattr(plot, 'y_tick_rotation', None)
+        if stored is not None:
+            return stored
+
+        # Absent y rotation is horizontal. It is not stored as 0.
+        return 0
+
+    # * method: _apply_ticks (static)
+    @staticmethod
+    def _apply_ticks(axes,
+            plot,
+            x_order,
+            y_order):
+        '''
+        Set tick text, size, rotation, and a numeric format when one was stored.
+
+        Absent decimal fields do not set a format. A stored count is a
+        fixed-point pattern derived here. It is not a format-string field.
+        Category text is not formatted by ``x_tick_decimals``.
+
+        :param axes: The axes whose ticks are set.
+        :type axes: Axes
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :param x_order: The x tick names, or None when x is numeric.
+        :type x_order: list | None
+        :param y_order: The y tick names, or None when y is numeric.
+        :type y_order: list | None
+        :return: The drawn x rotation.
+        :rtype: Any
+        '''
+
+        # Text ticks are the values. They are not renamed to category.
+        if x_order is not None:
+            axes.xaxis.set_major_locator(FixedLocator(list(range(len(x_order)))))
+            axes.set_xticklabels(list(x_order))
+        elif getattr(plot, 'x_tick_decimals', None) is not None:
+            places = plot.x_tick_decimals
+            axes.xaxis.set_major_formatter(FormatStrFormatter(f'%.{places}f'))
+
+        # The same rule on y. A text y axis ignores y_tick_decimals.
+        if y_order is not None:
+            axes.yaxis.set_major_locator(FixedLocator(list(range(len(y_order)))))
+            axes.set_yticklabels(list(y_order))
+        elif getattr(plot, 'y_tick_decimals', None) is not None:
+            places = plot.y_tick_decimals
+            axes.yaxis.set_major_formatter(FormatStrFormatter(f'%.{places}f'))
+
+        # One size for every tick. Rotation does not rotate the axis label.
+        tick_size = _supplied(
+            getattr(plot, 'tick_label_size', None),
+            DEFAULT_TICK_LABEL_SIZE,
+        )
+        x_rotation = MatplotlibRenderer._x_rotation(plot, x_order is not None)
+        y_rotation = MatplotlibRenderer._y_rotation(plot)
+        axes.tick_params(
+            axis='x',
+            labelsize=tick_size,
+            labelrotation=x_rotation,
+        )
+        axes.tick_params(
+            axis='y',
+            labelsize=tick_size,
+            labelrotation=y_rotation,
+        )
+
+        # Return the rotation so a non-zero x rotation can be right-aligned.
+        return x_rotation
+
+    # * method: _draw_legend (static)
+    @staticmethod
+    def _draw_legend(figure,
+            axes,
+            plot,
+            kind: str,
+            styles: list) -> None:
+        '''
+        Draw one legend entry per series, in record order, or draw none.
+
+        Absent ``show_legend`` draws the legend, including for one series.
+        False hides it and does not clear a stored location or title. Absent
+        location is upper right, inside the axes. The legend is one column.
+        There is no column-count field.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param axes: The axes the legend belongs to.
+        :type axes: Axes
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :param kind: The plot kind.
+        :type kind: str
+        :param styles: Drawing styles, one per series.
+        :type styles: list
+        :return: None
+        :rtype: None
+        '''
+
+        # False hides the legend. Absent is not stored as true, and still draws.
+        if getattr(plot, 'show_legend', None) is False:
+            return
+
+        # One entry per series. The same text is still two entries. Not a union.
+        handles = [_legend_handle(kind, style) for style in styles]
+        labels = [series.legend_text for series in plot.series]
+        size = _supplied(getattr(plot, 'legend_size', None), DEFAULT_LEGEND_SIZE)
+        family = MatplotlibRenderer._font_family(plot)
+        title = _present(getattr(plot, 'legend_title', None))
+        location = getattr(plot, 'legend_location', None) or 'upper_right'
+        prop = {
+            'family': family,
+            'size': size,
+        }
+
+        # outside_right is outside the axes. The other tokens stay inside.
+        if location == 'outside_right':
+            legend = _add_legend(axes, handles, labels, 'upper left', prop, title)
+            _style_legend_title(legend, title, size, family)
+            _place_outside_right(figure, axes, legend)
+            return
+
+        # An inside place stays inside the axes. best is not a fallback.
+        legend = _add_legend(
+            axes,
+            handles,
+            labels,
+            LEGEND_TOOL_LOC[location],
+            prop,
+            title,
+        )
+        _style_legend_title(legend, title, size, family)
+        legend.set_clip_on(False)
+
+    # * method: _draw_cell_artists (static)
+    @staticmethod
+    def _draw_cell_artists(axes,
+            plot,
+            series_values: list,
+            styles: list) -> tuple:
+        '''
+        Draw one plot's marks, axis text, ticks, and point labels on an axes.
+
+        This path does not draw a title, a subtitle, or a legend, and it does
+        not place the axes. Those artists belong to the picture that owns the
+        axes, not to this path. Axis labels and point labels use this plot's
+        family. Tick labels are styled by the caller, in that same family.
+
+        :param axes: The axes to draw on.
+        :type axes: Axes
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :param series_values: Role-to-values mappings, one per series.
+        :type series_values: list
+        :param styles: Drawing styles, one per series.
+        :type styles: list
+        :return: The x label, the y label, and the drawn x rotation.
+        :rtype: tuple
+        '''
+
+        # Text positions are first appearance inside this plot. They are not stored.
+        kind = plot.kind
+        family = MatplotlibRenderer._font_family(plot)
+        x_order, y_order = _axis_orders(kind, series_values)
+        points = _draw_series(axes, kind, series_values, styles, x_order, y_order)
+
+        # Axis text is composed here. The record keeps title and unit apart.
+        x_label, y_label = MatplotlibRenderer._draw_axis_labels(axes, plot)
+        x_rotation = MatplotlibRenderer._apply_ticks(axes, plot, x_order, y_order)
+
+        # Point labels use the drawing policy. Tick rotation does not move them.
+        if kind != 'bar':
+            for values, (xs, ys) in zip(series_values, points):
+                _draw_point_labels(axes, kind, values, xs, ys, family)
+
+        # Return the readings the caller needs to leave room. Nothing is stored.
+        return x_label, y_label, x_rotation
+
+    # * method: _draw (static)
+    @staticmethod
+    def _draw(figure,
+            plot: PlotAggregate,
+            series_values: list,
+            styles: list) -> None:
+        '''
+        Draw one declared plot on a figure of the caller's size.
+
+        The figure's inches are already set. The title, the subtitle, and the
+        legend are this picture's artists. This does not write the picture
+        back onto the record, and it does not fill an omitted field.
+
+        :param figure: The picture, already sized.
+        :type figure: Figure
+        :param plot: The declared plot record.
+        :type plot: PlotAggregate
+        :param series_values: Role-to-values mappings, one per series.
+        :type series_values: list
+        :param styles: Drawing styles, one per series.
+        :type styles: list
+        :return: None
+        :rtype: None
+        '''
+
+        # The cell artists are the same path a subplot uses. The title is not.
+        axes = figure.add_subplot(111)
+        x_label, y_label, x_rotation = MatplotlibRenderer._draw_cell_artists(
+            axes,
+            plot,
+            series_values,
+            styles,
+        )
+
+        # Figure text and the legend belong to this one picture.
+        has_subtitle = MatplotlibRenderer._draw_figure_text(figure, axes, plot)
+        MatplotlibRenderer._place_axes(figure, axes, plot, has_subtitle, x_label, y_label, x_rotation)
+        MatplotlibRenderer._draw_legend(figure, axes, plot, plot.kind, styles)
+        _style_tick_labels(figure, axes, MatplotlibRenderer._font_family(plot), x_rotation)
+
+    # * method: _cell_edge_insets (static)
+    @staticmethod
+    def _cell_edge_insets(plot, series_values: list) -> tuple:
+        '''
+        Return the room this cell's axis labels and tick text need.
+
+        The reading uses the cell's sizes. It does not use the cell's title
+        size, and it is not stored.
+
+        :param plot: The cell plot.
+        :type plot: PlotAggregate
+        :param series_values: Role-to-values mappings, one per series.
+        :type series_values: list
+        :return: The left inset and the bottom inset, in inches.
+        :rtype: tuple
+        '''
+
+        # Compose the labels to know whether they need room. Do not draw them yet.
+        x_order, y_order = _axis_orders(plot.kind, series_values)
+        x_label = _composed_label(
+            getattr(plot, 'x_title', None),
+            getattr(plot, 'x_unit', None),
+        )
+        y_label = _composed_label(
+            getattr(plot, 'y_title', None),
+            getattr(plot, 'y_unit', None),
+        )
+        x_rotation = MatplotlibRenderer._x_rotation(plot, x_order is not None)
+        return plot.axis_insets(x_label, y_label, x_rotation)
+
+    # * method: _subplot_area (static)
+    @staticmethod
+    def _subplot_area(figure, matrix, prepared: list) -> tuple:
+        '''
+        Return the declared grid's rectangle, in inches, inside the figure.
+
+        The rectangle includes the space an empty corner holds. The inset
+        leaves room for the figure title, the grid subtitle, and cell tick
+        text. It is not a margin field, and it does not change the requested
+        inches.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :param prepared: Occupied cells and the readings that draw them.
+        :type prepared: list
+        :return: Left, bottom, width, and height of the subplot area, in inches.
+        :rtype: tuple
+        '''
+
+        # The figure title sits above the grid. A subtitle needs room under it.
+        title_size = _supplied(
+            getattr(matrix, 'title_size', None),
+            DEFAULT_TITLE_SIZE,
+        )
+        subtitle_size = _supplied(
+            getattr(matrix, 'subtitle_size', None),
+            DEFAULT_SUBTITLE_SIZE,
+        )
+        top = _title_inset(
+            title_size,
+            subtitle_size,
+            matrix.subtitle_text is not None,
+        )
+
+        # The outermost tick text has to fall inside the figure.
+        left = 0.0
+        bottom = 0.0
+        for cell, values, _styles in prepared:
+            cell_left, cell_bottom = MatplotlibRenderer._cell_edge_insets(cell.plot, values)
+            if cell_left > left:
+                left = cell_left
+            if cell_bottom > bottom:
+                bottom = cell_bottom
+
+        # Fit the room. The figure size is the requested pair.
+        width = figure.get_figwidth()
+        height = figure.get_figheight()
+        top, right, bottom, left = _fit_insets(
             width,
             height,
+            top,
+            RIGHT_INSET,
+            bottom,
+            left,
         )
+        return left, bottom, width - left - right, height - top - bottom
+
+    # * method: _occupy (static)
+    @staticmethod
+    def _occupy(figure,
+            area: tuple,
+            matrix,
+            prepared: list,
+            row_spacing: float,
+            col_spacing: float) -> list:
+        '''
+        Draw one subplot per occupied cell. An empty position gets no axes.
+
+        The cell does not span an empty neighbor. Tick labels are this
+        subplot's tick text.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param area: The subplot area, in inches.
+        :type area: tuple
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :param prepared: Occupied cells and the readings that draw them.
+        :type prepared: list
+        :param row_spacing: The row gap as a fraction of the average slot height.
+        :type row_spacing: float
+        :param col_spacing: The column gap as a fraction of the average slot width.
+        :type col_spacing: float
+        :return: ``(row, col, axes)`` for each occupied cell.
+        :rtype: list
+        '''
+
+        # Only an occupied cell becomes an axes. An empty corner keeps its slot.
+        occupied = []
+        for cell, values, styles in prepared:
+            rect = _cell_rect(
+                area,
+                matrix.rows,
+                matrix.cols,
+                cell.row,
+                cell.col,
+                row_spacing,
+                col_spacing,
+            )
+            axes = figure.add_axes(_figure_rect(figure, rect))
+            x_rotation = MatplotlibRenderer._draw_cell_artists(
+                axes,
+                cell.plot,
+                values,
+                styles,
+            )[2]
+            _style_tick_labels(
+                figure,
+                axes,
+                MatplotlibRenderer._font_family(cell.plot),
+                x_rotation,
+            )
+            occupied.append((cell.row, cell.col, axes))
+        return occupied
+
+    # * method: _move_occupied (static)
+    @staticmethod
+    def _move_occupied(figure,
+            area: tuple,
+            matrix,
+            occupied: list,
+            row_spacing: float,
+            col_spacing: float) -> None:
+        '''
+        Move occupied subplots into a resized subplot area.
+
+        The spacing fractions are applied again. They are not recomputed,
+        and they are not stored.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param area: The subplot area, in inches.
+        :type area: tuple
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :param occupied: ``(row, col, axes)`` for each occupied cell.
+        :type occupied: list
+        :param row_spacing: The row gap as a fraction of the average slot height.
+        :type row_spacing: float
+        :param col_spacing: The column gap as a fraction of the average slot width.
+        :type col_spacing: float
+        :return: None
+        :rtype: None
+        '''
+
+        # The same fractions, on the smaller area. Empty slots are still empty.
+        for row, col, axes in occupied:
+            rect = _cell_rect(
+                area,
+                matrix.rows,
+                matrix.cols,
+                row,
+                col,
+                row_spacing,
+                col_spacing,
+            )
+            axes.set_position(_figure_rect(figure, rect))
+
+    # * method: _grid_legend_entries (static)
+    @staticmethod
+    def _grid_legend_entries(prepared: list) -> tuple:
+        '''
+        Return the grid-legend union, computed at draw time.
+
+        Order is increasing row, then increasing column, then series order
+        inside the cell. The first series that contributes a text owns that
+        entry. The union is not stored.
+
+        :param prepared: Occupied cells and the readings that draw them.
+        :type prepared: list
+        :return: Handles and labels, in union order.
+        :rtype: tuple
+        '''
+
+        # The first owner keeps the handle. A later series with the same text does not.
+        handles = []
+        labels = []
+        seen = set()
+        cells = sorted(prepared, key=lambda item: (item[0].row, item[0].col))
+        for cell, values, styles in cells:
+            for index, series in enumerate(cell.plot.series):
+                text = series.legend_text
+                if text in seen:
+                    continue
+                seen.add(text)
+                handles.append(_legend_handle(cell.plot.kind, styles[index]))
+                labels.append(text)
+        return handles, labels
+
+    # * method: _draw_grid_legend (static)
+    @staticmethod
+    def _draw_grid_legend(figure,
+            matrix,
+            area: tuple,
+            prepared: list,
+            occupied: list,
+            row_spacing: float,
+            col_spacing: float) -> tuple:
+        '''
+        Draw one grid legend when the matrix asks, or draw none.
+
+        Absent ``show_legend`` draws no legend and is not stored as false.
+        False draws none and does not clear a stored place or title. The
+        legend is anchored to the subplot area, not to one cell.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :param area: The subplot area, in inches.
+        :type area: tuple
+        :param prepared: Occupied cells and the readings that draw them.
+        :type prepared: list
+        :param occupied: ``(row, col, axes)`` for each occupied cell.
+        :type occupied: list
+        :param row_spacing: The row gap as a fraction of the average slot height.
+        :type row_spacing: float
+        :param col_spacing: The column gap as a fraction of the average slot width.
+        :type col_spacing: float
+        :return: The subplot area after a legend inset, if any.
+        :rtype: tuple
+        '''
+
+        # Absent and false draw none. A stored place is not cleared.
+        if getattr(matrix, 'show_legend', None) is not True:
+            return area
+
+        # One legend for the figure. The union is not written back.
+        handles, labels = MatplotlibRenderer._grid_legend_entries(prepared)
+        size = _supplied(getattr(matrix, 'legend_size', None), DEFAULT_LEGEND_SIZE)
+        family = MatplotlibRenderer._font_family(matrix)
+        title = _present(getattr(matrix, 'legend_title', None))
+        location = getattr(matrix, 'legend_location', None) or 'upper_right'
+        prop = {
+            'family': family,
+            'size': size,
+        }
+
+        # outside_right is outside the subplot area. The other tokens sit inside it.
+        if location == 'outside_right':
+            legend = _add_figure_legend(
+                figure,
+                handles,
+                labels,
+                'upper left',
+                prop,
+                title,
+                (0, 1),
+            )
+            _style_legend_title(legend, title, size, family)
+            area = _inset_area_for_outside_legend(figure, area, legend)
+            MatplotlibRenderer._move_occupied(
+                figure,
+                area,
+                matrix,
+                occupied,
+                row_spacing,
+                col_spacing,
+            )
+            _place_legend_outside_area(figure, area, legend)
+            return area
+
+        # An inside place is a corner of the subplot area. best is not a fallback.
+        legend = _add_figure_legend(
+            figure,
+            handles,
+            labels,
+            LEGEND_TOOL_LOC[location],
+            prop,
+            title,
+            _figure_rect(figure, area),
+        )
+        _style_legend_title(legend, title, size, family)
+        legend.set_clip_on(False)
+        return area
+
+    # * method: _draw_grid_text (static)
+    @staticmethod
+    def _draw_grid_text(figure, matrix, area: tuple) -> None:
+        '''
+        Draw the figure title, and the grid subtitle under it when present.
+
+        The title is the matrix title when that field is present and not
+        blank, otherwise the matrix name. The reading is not written back.
+        The subtitle is the matrix description. A cell's text is not drawn.
+
+        :param figure: The picture.
+        :type figure: Figure
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :param area: The subplot area, in inches.
+        :type area: tuple
+        :return: None
+        :rtype: None
+        '''
+
+        # One family and the declared sizes. Absent sizes are not stored.
+        x0, y0, width, height = area
+        fig_w = figure.get_figwidth()
+        fig_h = figure.get_figheight()
+        family = MatplotlibRenderer._font_family(matrix)
+        title_size = _supplied(
+            getattr(matrix, 'title_size', None),
+            DEFAULT_TITLE_SIZE,
+        )
+        subtitle = matrix.subtitle_text
+        subtitle_size = _supplied(
+            getattr(matrix, 'subtitle_size', None),
+            DEFAULT_SUBTITLE_SIZE,
+        )
+        center = (x0 + width / 2) / fig_w
+        gap = 4 / 72
+
+        # The subtitle sits just above the subplot area, under the figure title.
+        if subtitle is None:
+            title_y = y0 + height + gap
+        else:
+            subtitle_y = y0 + height + gap
+            figure.text(
+                center,
+                subtitle_y / fig_h,
+                subtitle,
+                ha='center',
+                va='bottom',
+                fontsize=subtitle_size,
+                fontfamily=family,
+            )
+            title_y = subtitle_y + (subtitle_size + 6) / 72
+
+        # The figure title is not an axes title. The id is not drawn.
+        figure.suptitle(
+            matrix.title_text,
+            fontsize=title_size,
+            fontfamily=family,
+            x=center,
+            y=title_y / fig_h,
+            ha='center',
+            va='bottom',
+        )
+
+    # * method: _draw_matrix (static)
+    @staticmethod
+    def _draw_matrix(figure, matrix, prepared: list) -> None:
+        '''
+        Draw one matrix on a figure of the caller's size.
+
+        The figure's inches are already set. Spacing is a fraction of the
+        declared slot. An omitted fraction is not written back. This does
+        not write the picture onto the record.
+
+        :param figure: The picture, already sized.
+        :type figure: Figure
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :param prepared: Occupied cells and the readings that draw them.
+        :type prepared: list
+        :return: None
+        :rtype: None
+        '''
+
+        # Absent spacing is the fraction 0.2. A stored 0 stays a gap of zero.
+        row_spacing = _supplied(
+            getattr(matrix, 'row_spacing', None),
+            DEFAULT_GRID_SPACING,
+        )
+        col_spacing = _supplied(
+            getattr(matrix, 'col_spacing', None),
+            DEFAULT_GRID_SPACING,
+        )
+        area = MatplotlibRenderer._subplot_area(figure, matrix, prepared)
+        occupied = MatplotlibRenderer._occupy(
+            figure,
+            area,
+            matrix,
+            prepared,
+            row_spacing,
+            col_spacing,
+        )
+
+        # The legend may inset the area. The fractions are not recomputed as fields.
+        area = MatplotlibRenderer._draw_grid_legend(
+            figure,
+            matrix,
+            area,
+            prepared,
+            occupied,
+            row_spacing,
+            col_spacing,
+        )
+        MatplotlibRenderer._draw_grid_text(figure, matrix, area)
+
+    # * method: _prepare_matrix (static)
+    @staticmethod
+    def _prepare_matrix(matrix) -> list:
+        '''
+        Read cells that can be drawn, or refuse the picture before a figure exists.
+
+        A requested legend with an unknown place is not a picture. Cell marks
+        use the same check one plot uses. Nothing is written back.
+
+        :param matrix: The declared matrix.
+        :type matrix: PlotMatrixAggregate
+        :return: Occupied cells and the readings that draw them.
+        :rtype: list
+        '''
+
+        # best is not a fallback. An absent legend does not read the place.
+        if getattr(matrix, 'show_legend', None) is True:
+            matrix.require_legend_location()
+
+        # A cell that cannot be drawn fails here. Do not start a partial grid.
+        prepared = []
+        for cell in matrix.cells:
+            values, styles = MatplotlibRenderer._prepare(cell.plot)
+            prepared.append((cell, values, styles))
+        return prepared
